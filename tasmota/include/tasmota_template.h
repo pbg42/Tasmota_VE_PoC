@@ -20,12 +20,6 @@
 #ifndef _TASMOTA_TEMPLATE_H_
 #define _TASMOTA_TEMPLATE_H_
 
-#define D_SENSOR_VICTRON_RX "Victron RX"
-#define D_SENSOR_VICTRON_RX0 "Victron RX0"
-#define D_SENSOR_VICTRON_RX1 "Victron RX1"
-#define D_SENSOR_VICTRON_RX2 "Victron RX2"
-#define D_SENSOR_VICTRON_RX3 "Victron RX3"
-
 // User selectable GPIO functionality
 // ATTENTION: Only add at the end of this list just before GPIO_SENSOR_END
 //            Then add the same name(s) in a nice location in array kGpioNiceList
@@ -215,11 +209,12 @@ enum UserSelectablePins {
   GPIO_MCP23XXX_INT, GPIO_MCP23SXX_CS,  // MCP23xxx Int and SPI Chip select
   GPIO_PCF8574_INT,                     // PCF8574 interrupt
   GPIO_LOX_O2_RX,                       // LOX-O2 RX
-  GPIO_VICTRON_VEDIRECT_RX,
-  GPIO_VICTRON_VEDIRECT_RX0,
-  GPIO_VICTRON_VEDIRECT_RX1,
-  GPIO_VICTRON_VEDIRECT_RX2,
-  GPIO_VICTRON_VEDIRECT_RX3,
+  GPIO_VICTRON_VEDIRECT_RX,             // 
+  GPIO_VICTRON_VEDIRECT_TX,             //
+  //GPIO_VICTRON_VEDIRECT_RX0,
+  //GPIO_VICTRON_VEDIRECT_RX1,
+  //GPIO_VICTRON_VEDIRECT_RX2,
+  //GPIO_VICTRON_VEDIRECT_RX3,
   GPIO_SENSOR_END };
 
 // Error as warning to rethink GPIO usage with max 2045
@@ -477,10 +472,11 @@ const char kSensorNames[] PROGMEM =
   D_SENSOR_PCF8574_INT "|"
   D_SENSOR_LOX_O2_RX "|"
   D_SENSOR_VICTRON_RX "|"
-  D_SENSOR_VICTRON_RX0 "|"
-  D_SENSOR_VICTRON_RX1 "|"
-  D_SENSOR_VICTRON_RX2 "|"
-  D_SENSOR_VICTRON_RX3 "|"
+  D_SENSOR_VICTRON_TX "|"
+  // "|"
+  //D_SENSOR_VICTRON_RX1 "|"
+  //D_SENSOR_VICTRON_RX2 "|"
+  //D_SENSOR_VICTRON_RX3 "|"
   ;
 
 const char kSensorNamesFixed[] PROGMEM =
@@ -983,11 +979,11 @@ const uint16_t kGpioNiceList[] PROGMEM = {
   AGPIO(GPIO_VINDRIKTNING_RX),          // Ikea Vindriktning
 #endif
 #ifdef USE_VICTRON
-  AGPIO(GPIO_VICTRON_VEDIRECT_RX),
-  AGPIO(GPIO_VICTRON_VEDIRECT_RX0),
-  AGPIO(GPIO_VICTRON_VEDIRECT_RX1),
-  AGPIO(GPIO_VICTRON_VEDIRECT_RX2),
-  AGPIO(GPIO_VICTRON_VEDIRECT_RX3),
+  AGPIO(GPIO_VICTRON_VEDIRECT_RX),    // Serial Interface for VE-Direct Protocol
+  AGPIO(GPIO_VICTRON_VEDIRECT_TX),
+//  AGPIO(GPIO_VICTRON_VEDIRECT_RX1),
+//  AGPIO(GPIO_VICTRON_VEDIRECT_RX2),
+//  AGPIO(GPIO_VICTRON_VEDIRECT_RX3),
 #endif
 #ifdef USE_HM330X
   AGPIO(GPIO_HM330X_SET),               // HM330X Sleep pin (active low)

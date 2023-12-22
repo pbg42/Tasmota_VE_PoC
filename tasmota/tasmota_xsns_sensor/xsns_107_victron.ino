@@ -44,7 +44,7 @@ pio run -t nobuild -t factory_flash -e tasmota
 
 #define XSNS_107                 107
 #define VICTRON_BAUTRATE 19200
-#define VICTRON_MSG_SIZE (512) /* must be at least 19200 / 4 == 480 bytes! */
+#define VICTRON_MSG_SIZE (512) /* must be at least more than bytes in 250ms at 19200 Bd: 1920 / 4 == 480 bytes! */
 
 #define MIN(a,b)  ((a) < (b) ? (a) : (b))
 
@@ -269,6 +269,7 @@ static const Tuple field_metadata[] PROGMEM = {
 
 
 /* array of the following struct */
+/*
 typedef struct {
     uint64_t nbytes = 0; // counts every byte that this serial instance has received
     bool last_250ms_had_data = false;
@@ -277,19 +278,19 @@ typedef struct {
     std::string backlog;
     VPSS last_msg;
 } Victron_Serial;
-
+*/
 
 struct VICTRON {
   uint64_t nbytes = 0; // at 168 bytes/S  32 bit would overflow after 295.89 days.
   uint32_t _50ms = 0;
   uint32_t _250ms = 0;
-  uint32_t _xsns107 = 0;
+  //uint32_t _xsns107 = 0;
   bool last_250ms_had_data = false;
-  TasmotaSerial *VictronSerial = NULL;
+  TasmotaSerial *serial = NULL;
   std::string backlog;
   VPSS last_msg;
 
-  std::vector<Victron_Serial*> serial_lst; // new
+//  std::vector<Victron_Serial*> serial_lst; // new
 } g_Victron;
 
 
@@ -308,9 +309,9 @@ static bool read_uart(std::string & rv, void *vp) {
   bool do_loop = true; //
   do {
     uint8_t buf[128] = {0};
-    int s_available = v->VictronSerial->available();
+    int s_available = v->serial->available();
     size_t toread = MIN(sizeof(buf), s_available);
-    size_t  got = v->VictronSerial->read(buf, toread);
+    size_t  got = v->serial->read(buf, toread);
     if (got == (size_t)s_available) do_loop = false; // no need for a loop
     rv += std::string(buf, buf+got);
     v->nbytes += got;
@@ -319,23 +320,6 @@ static bool read_uart(std::string & rv, void *vp) {
   return true; // success
 }
 
-static bool read_uart2(std::string & rv, void *vp) {
-  Victron_Serial *vs = (Victron_Serial*)vp;
-  if (!vs) return false;
-  rv = "";
-  bool do_loop = true; //
-  do {
-    uint8_t buf[128] = {0};
-    int s_available = vs->serial->available();
-    size_t toread = MIN(sizeof(buf), s_available);
-    size_t  got = vs->serial->read(buf, toread);
-    if (got == (size_t)s_available) do_loop = false; // no need for a loop
-    rv += std::string(buf, buf+got);
-    vs->nbytes += got;
-  } while (do_loop);
-
-  return true; // success
-}
 
 
 static bool VictronVerifyChecksum(const std::string & s) {
@@ -387,14 +371,116 @@ static uint8_t get_checksum(const std::string & s) {
  * all bytes in a block will equal 0 if there were no transmission errors.
  * Multiple blocks are sent containing different fields.
  * (Source: https://www.victronenergy.com/upload/documents/VE.Direct-Protocol-3.32.pdf)
+
+Additionally, if the HEX protocol is activated, then HEX blocks can be intermixed
+The frame format of the VE.Direct protocol has the following general format:
+: [command] [data][data][…] [check]\n
+Where the colon indicates the start of the frame and the newline is the end of frame. The sum of all
+data bytes and the check must equal 0x55. Since the normal protocol is in text values the frames are
+sent in their hexadecimal ASCII representation, [‘0’ .. ’9’], [‘A’ .. ’F’], must be uppercase. There is no
+need to escape any characters.
+: [command] [dataHighNibble, dataLowNibble][……] [checkHigh, checkLow] \n
+Note: The command is only send as a single nibble. Numbers are sent in Little Endian format. An
+error response with value 0xAAAA is sent on framing errors.
+
+So, I implemented a state machine that discriminates the data stream HEX Blocks and 
+
 **/
+enum class State {
+  IN_KEY,
+  IN_VALUE,
+  IN_CHECKSUM,
+  IN_COMMAND,
+  IN_HEX,
+  UNKNOWN
+};
+
+class Parser {
+public:
+  Parser() : state(State::UNKNOWN), checksum(0) {};
+private:
+  void parseCharacter(const char c);
+  void pushKey(const std::string& key) {};
+  void emitHexMessage();
+  void emitText();
+  State state;
+  uint32_t checksum;
+  std::string key;
+  std::string value;
+  std::string hexline;
+
+};
+
+void Parser::parseCharacter(const char c)
+{
+  switch (state) {
+  case State::UNKNOWN:
+    if (c=='\r') {
+      checksum=static_cast<uint8>(c);
+      state = State::IN_KEY;
+    }
+    else if (c ==':') {
+      checksum=static_cast<uint8>(c);
+      state = State::IN_HEX;
+    }
+    break;
+
+  case State::IN_KEY:
+    checksum+=static_cast<uint8>(c);
+    if (c == '\r') {
+      //skip
+    }
+    else if (c =='n') {
+      //skip
+    }
+    else if (c == '\t') {
+      if (key == "Checksum") {
+        state = State::IN_CHECKSUM;
+      }
+      else {
+        state = State::IN_VALUE;
+        pushKey(key);
+        key="";
+      }
+    }
+    else {
+      key.push_back(c);
+    }
+    break;
+
+  case State::IN_CHECKSUM:
+    // operate the checksum
+    if (checksum & 0xff == static_cast<uint8_t>(c)) {
+      // checksum is OK, we can emit all key/value pairs now
+      emitText();
+    }
+    else {
+      // bad luck. clear and start again
+    }
+    // thi is tricky: the next char may be a : from the next HEX or a newline with text
+    state = State::UNKNOWN;
+    break;
+  
+  case State::IN_HEX:
+    if (c == '\n') {
+      emitHexMessage();
+      hexline="";    
+    }
+    else {
+      hexline.push_back(c);
+    };
+    break;
+  // no otherwise else to find missing states by compiler
+  }
+};
+
 
 static void Victron250ms(void *vp) {                // Every 250ms
   if (!vp) return;
   VICTRON *v = (VICTRON*)vp;
-  if (v->VictronSerial == NULL)
+  if (v->serial == NULL)
     return;
-  int s_available = v->VictronSerial->available();
+  int s_available = v->serial->available();
   if (s_available == 0) { // No new data available on UART
     if (v->last_250ms_had_data && v->_250ms >= 4 ) { // we need to process the queued data
       size_t len = v->backlog.size();
@@ -445,111 +531,21 @@ static void Victron250ms(void *vp) {                // Every 250ms
   }
 }
 
-static void Victron250msV2(void *vp) {
-  if (!vp) return;
-  VICTRON *v = (VICTRON*)vp;
-  // AddLog(LOG_LEVEL_DEBUG, PSTR("%s:%s() v->serial_lst.size(): %d\n"), __FILE__, __func__, (int)v->serial_lst.size());
-  for (size_t i = 0; i < v->serial_lst.size(); i++) {
-    Victron_Serial *cur = (Victron_Serial*)v->serial_lst[i];
-    int s_available = cur->serial->available();
-    AddLog(LOG_LEVEL_DEBUG, PSTR("%s:%s() loop %d, available: %d\n"), __FILE__, __func__, (int)i, s_available);
-    if (s_available == 0) {
-      size_t len = cur->backlog.size();
-      if (cur->last_250ms_had_data && v->_250ms >= 4 && len > 12) { // we need to process the queued data
-        if (VictronVerifyChecksum(cur->backlog) == true) {
-          AddLog(LOG_LEVEL_DEBUG, PSTR("%s:%s():%d (%d) Checksum_OK: 0x%02x, bl: %d\n"), __FILE__, __func__, __LINE__, (int)i, (unsigned)get_checksum(v->backlog), (int)len);
-          size_t pos = cur->backlog.find("Checksum"); // this should be right at the end at position len - 10
-          if (pos + 10 == len) { // syntactical correct ending
-            HERE();
-            char prev_char = 0;
-            size_t start_idx = 0;
-            // \r\nKEY_LABEL1\tVALUE1\r\nKEY_LABEL2\tVALUE2\r\nKEY_LABEL3\t\VALUE3...
-            std::string key, value;
-            VPSS vpss;
-            for (size_t i = 0; i < len; i++) { // tokenize
-              char c = cur->backlog[i];
-              if (i > 0 && c == '\t') { // key has ended...
-                key = cur->backlog.substr(start_idx, i - start_idx);
-              } else if (i > 0 && (c == '\r' || (i+1)==len)) { // value has ended...
-                value = cur->backlog.substr(start_idx, i - start_idx);
-                vpss.push_back(PSS(key, value));
-              }
-              if (prev_char == '\t' || prev_char == '\n') start_idx = i;
-              prev_char = c;
-            }
-            if (key == "Checksum") {
-              value = cur->backlog.substr(start_idx, len - start_idx);
-              if (value.size() == 1) {
-                vpss.push_back(PSS(key, value));
-              }
-            }
-            HERE();
-            cur->last_msg = vpss;
-          } else {
-            AddLog(LOG_LEVEL_DEBUG, PSTR("%s:%s():%d pos(%d) + 10 != len(%d)"), __FILE__, __func__, __LINE__, (int)pos, (int)len);
-          }
-        } else {
-          AddLog(LOG_LEVEL_DEBUG, PSTR("%s:%s():%d (%d) Checksum_FAIL: 0x%02x, bl: %d\n"), __FILE__, __func__, __LINE__, (int)i, (unsigned)get_checksum(cur->backlog), (int)len);
-        }
-        cur->backlog = ""; // empty backlock
-      }
-    } else { // s_available == 0
-      HERE();
-      std::string s = "";
-      bool rv = read_uart2(s, cur);
-      if (rv) {
-        cur->backlog += s;
-        v->nbytes += s.size();
-        cur->last_250ms_had_data = true;
-      } else {
-        cur->last_250ms_had_data = false;
-      }
-    }
-  }
-}
-
-
 static void VictronInit(void *vp) {
   if (!vp) return;
-#if 0
   VICTRON *v = (VICTRON*)vp;
   if (PinUsed(GPIO_VICTRON_VEDIRECT_RX)) {
     AddLog(LOG_LEVEL_DEBUG, PSTR("%s:%s(void):%d Pin(GPIO_VICTRON_VEDIRECT_RX): %d, GPIO_VICTRON_VEDIRECT_RX:(%d)\n"), __FILE__, __func__, __LINE__,
                             (int)Pin(GPIO_VICTRON_VEDIRECT_RX), (int)GPIO_VICTRON_VEDIRECT_RX);
-    v->VictronSerial = new TasmotaSerial(Pin(GPIO_VICTRON_VEDIRECT_RX), -1, 1 /* hw fallback */, 0 /* nwmode, 0 default */, VICTRON_MSG_SIZE /* buf size */);
-    if (v->VictronSerial == NULL) return;
-    if (v->VictronSerial->begin(VICTRON_BAUTRATE)) { // 480 bytes / 250ms
-      if (v->VictronSerial->hardwareSerial()) {
+    v->serial = new TasmotaSerial(Pin(GPIO_VICTRON_VEDIRECT_RX), -1, 1 /* hw fallback */, 0 /* nwmode, 0 default */, VICTRON_MSG_SIZE /* buf size */);
+    if (v->serial == NULL) return;
+    if (v->serial->begin(VICTRON_BAUTRATE)) { // 480 bytes / 250ms
+      if (v->serial->hardwareSerial()) {
         ClaimSerial();
       }
     }
   }
-#else
-  VICTRON *v = (VICTRON*)vp;
-  int gpio_lst[] = {GPIO_VICTRON_VEDIRECT_RX0, GPIO_VICTRON_VEDIRECT_RX1, GPIO_VICTRON_VEDIRECT_RX2, GPIO_VICTRON_VEDIRECT_RX3};
-  for (int i = 0; i < sizeof(gpio_lst)/sizeof(gpio_lst[0]); i++) {
-    int gpio = gpio_lst[i];
-    AddLog(LOG_LEVEL_INFO, PSTR("%s:%s() gpio_lst[%d] = %d (%d)\n"), __FILE__, __func__, i, gpio, (int)PinUsed(gpio));
-    if (PinUsed(gpio)) {
-      Victron_Serial *vs = (Victron_Serial*) new Victron_Serial;
-      if (vs) {
-        vs->nbytes = 0;
-        vs->last_250ms_had_data = false;
-        vs->serial = new TasmotaSerial(Pin(gpio), -1, 1, 0, VICTRON_MSG_SIZE);
-        if (!vs->serial) {
-          AddLog(LOG_LEVEL_INFO, PSTR("%s:%s() vs->serial == NULL\n"), __FILE__, __func__);
-          delete vs;
-          return;
-        }
-        vs->serial->begin(VICTRON_BAUTRATE);
-        vs->backlog = "";
-        v->serial_lst.push_back(vs);
-      }
-    }
-  }
-#endif
 }
-
 
 static void process_PID(const Tuple *tuple, const char *value, std::string & rv) {
   if (!tuple || !value) return;
@@ -591,7 +587,7 @@ static void my_fmt(const Tuple *tuple, const char *value, std::string & rv) {
 
 static void VictronShow(bool json, void *vp) {
   if (!vp) return;
-  VICTRON *v = (VICTRON*)vp;
+  VICTRON *v = reinterpret_cast<VICTRON*>(vp);
   if (json) {
     auto t0 = millis();
     ResponseAppend_P(PSTR(",\"VictronVE.Direct\":[" ));
@@ -626,12 +622,12 @@ static void VictronShow(bool json, void *vp) {
 #ifdef USE_WEBSERVER
   } else { // if json
     char tmpbuf[20] = {0};
-    for (int idx = 0; idx < v->serial_lst.size(); idx++) {
+    for (int idx = 0; idx < 1; idx++) { // v->serial_lst.size(); idx++) {
       if (idx > 0) { // not before first
         WSContentSend_P(PSTR("<hr>\n"));
       }
       AddLog(LOG_LEVEL_DEBUG, PSTR("%s:%s():%d idx=%d\n"), __FILE__, __func__, __LINE__, (int)idx);
-      const Victron_Serial *cur = v->serial_lst[idx];
+      const VICTRON *cur = v; //->serial_lst[idx];
       if (cur->last_msg.size() >= 1 && cur->last_msg[cur->last_msg.size()-1].first == "Checksum") {
         HERE();
         for (size_t i = 0; i < cur->last_msg.size()-1; i++) {
@@ -676,7 +672,7 @@ static void VictronShow(bool json, void *vp) {
 
 bool Xsns107(uint32_t function) {
   VICTRON *v = &g_Victron;
-  v->_xsns107++;
+  //v->_xsns107++;
 
   switch (function) {
     case FUNC_EVERY_50_MSECOND:
@@ -689,8 +685,8 @@ bool Xsns107(uint32_t function) {
     case FUNC_EVERY_250_MSECOND:
       HERE();
       v->_250ms++;
-      // Victron250ms((void*)v);
-      Victron250msV2((void*)v);
+      Victron250ms((void*)v);
+      //Victron250msV2((void*)v);
       break;
     case FUNC_LOOP:
       break;
