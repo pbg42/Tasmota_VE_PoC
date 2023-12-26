@@ -14,17 +14,15 @@ _Written for PlatformIO._
 **In light of current events we like to support the people behind _PlatformIO Project_, especially Ivan Kravets, and wish them the strength to help stop the war. See [platformio-is-ukrainian-project-please-help-us-stop-the-war](https://community.platformio.org/t/platformio-is-ukrainian-project-please-help-us-stop-the-war/26330) for what you can do.**
 
 <hr></hr>
-**I (pbg42) made this fork based on the work of micha-m to support devices based on the VICRON ENERGY VE-direct protocol. This includes solar power regulators, battery controllers and energy inverters. 
-My primary target is to support the two devices that I own:** 
+
+**I (pbg42) made this fork based on the work of micha-m to support devices based on the VICRON ENERGY VE-direct protocol. This includes solar power regulators, battery controllers and energy inverters. My primary target is to support the two devices that I own:** 
 
 * Victron Solar Power Regulator MPPT 15/20
 * Phoenix Inverter 12/250
 
-**As I want to implement the protocol described in the manuals, this code should be applicable for similar devices of that product family as well.
-micha-m wants to extend the driver to support more than one device, while my target is to implement the HEX protocol as well that allows control of the devices,
-not only reading the values.**
+**As I want to implement the protocol described in the manuals, this code should be applicable for similar devices of that product family as well. Micha-m wants to extend the driver to support more than one device, while my target is to implement the HEX protocol as well that allows control of the devices, not only reading the values.**
 
-*** Currently this fork is in alfa-status. ***
+***Currently this fork is in alfa-status.***
 
 <hr></hr>
 ## Easy install
