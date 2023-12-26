@@ -14,7 +14,15 @@ _Written for PlatformIO._
 **In light of current events we like to support the people behind _PlatformIO Project_, especially Ivan Kravets, and wish them the strength to help stop the war. See [platformio-is-ukrainian-project-please-help-us-stop-the-war](https://community.platformio.org/t/platformio-is-ukrainian-project-please-help-us-stop-the-war/26330) for what you can do.**
 
 <hr></hr>
+I (pbg42) made this fork based on the work of micha-m to support devices based on the VICRON ENERGY VE-direct protocol. this includes Solar power controlers and energy converters. Currently this extensions are in alfa-status. 
+My interest is to support the two devices that I own, which is 
 
+* Victron Solar Power Regulator MPPT 15/20
+* Phoenix Inverter 12/250
+
+but - as I want to implement the protocol described in the manuals, it should be applicable for imilar devices of that product family as well.
+
+<hr></hr>
 ## Easy install
 
 Easy initial installation of Tasmota can be performed using the [Tasmota WebInstaller](https://tasmota.github.io/install/).
