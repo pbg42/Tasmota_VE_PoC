@@ -65,6 +65,12 @@ typedef struct {
   const char *res_unit;
 } Tuple;
 
+static std::string PID2Devicename(const char* const pid)
+{
+  typedef struct {
+    const char *product_name;
+    const char *pid;
+  } Pair;
 
 static const Pair pid_mapping[] PROGMEM = {
   {"BMV-700", "0x203"},
@@ -201,6 +207,48 @@ static const Pair pid_mapping[] PROGMEM = {
   {"SmartShunt 500A/50mV", "0xA389"},
   {"SmartShunt 1000A/50mV", "0xA38A"},
   {"SmartShunt 2000A/50mV", "0xA38B"}
+  };
+  
+  std::string rv = std::string(pid);
+  for (size_t i = 0; i < sizeof(pid_mapping)/sizeof(pid_mapping[0]); i++) {
+    if (0 == strcasecmp(pid, pid_mapping[i].pid)) {
+      rv = std::string(pid_mapping[i].product_name) + " (" + pid + ")";
+      break;
+    }
+  }
+  return rv;
+};
+
+static std::string CS2name(const char* const CS) {
+
+  static const std::pair<int, const char*> CSnames[] PROGMEM = {
+    {0, "Off"},
+    {1, "Low power"},
+    {2, "Fault"},
+    {3, "Bulk"},
+    {4, "Absorbtion"},
+    {5, "Float"},
+    {6, "Storage"},
+    {7, "Equalize (manual)"},
+    {9, "Inverting"},
+    {11, "Power supply"},
+    {245, "Starting-up"},
+    {246, "Repeated Absorption"},
+    {247, "Auto Equalize / Recondition"},
+    {248, "BatterySafe"},
+    {252,"External Control"} 
+  };
+  std::string rv = std::string(CS);
+  int cs_id = 0;
+  if (1 == sscanf(CS, "%i", &cs_id)) {
+    for (size_t i = 0; i < sizeof(CSnames)/sizeof(CSnames[0]); i++) {
+      if (CSnames[i].first == cs_id) {
+        rv = std::string(CSnames[i].second);
+        break;
+      }
+    }
+  }
+  return rv;
 };
 
 static const Tuple field_metadata[] PROGMEM = {
@@ -268,20 +316,48 @@ static const Tuple field_metadata[] PROGMEM = {
 };
 
 
-/* array of the following struct */
-/*
-typedef struct {
-    uint64_t nbytes = 0; // counts every byte that this serial instance has received
-    bool last_250ms_had_data = false;
-    TasmotaSerial *serial = NULL;
-    uint32_t pin; // which GPIO pin is assigned to this serial instance
-    std::string backlog;
-    VPSS last_msg;
-} Victron_Serial;
-*/
+enum class State {
+  IN_KEY,
+  IN_VALUE,
+  IN_CHECKSUM,
+  IN_COMMAND,
+  IN_HEX,
+  UNKNOWN
+};
 
-struct VICTRON {
-  uint64_t nbytes = 0; // at 168 bytes/S  32 bit would overflow after 295.89 days.
+class Receiver {
+  public:
+  virtual void getText(const VPSS& data)=0;
+  virtual void getHexData(const std::string& cmd, const std::string&arg)=0;
+  virtual ~Receiver() {};
+};
+
+class Parser {
+public:
+  Parser() : state(State::UNKNOWN), checksum(0), receiverPtr(0) {};
+  void parseCharacter(const char c);
+  // whenever data gets ready (either a single  )
+  void setReceiver(Receiver* p) { receiverPtr=p; }
+private:
+
+  void pushKeyValue();
+  void emitHexMessage();
+  void emitText();
+  State state;
+  uint32_t checksum;
+  std::string key;
+  std::string value;
+  std::string hexline;
+  VPSS keyValues;
+  Receiver* receiverPtr;
+
+};
+
+static const std::size_t NUM_DEVICES = 1;
+
+class VICTRON : Receiver {
+  public:
+  uint32_t nbytesToday = 0; // at 168 bytes/S  32 bit will overflow. who cares about that number?
   uint32_t _50ms = 0;
   uint32_t _250ms = 0;
   //uint32_t _xsns107 = 0;
@@ -289,9 +365,48 @@ struct VICTRON {
   TasmotaSerial *serial = NULL;
   std::string backlog;
   VPSS last_msg;
+  Parser parser;
+  void init(TasmotaSerial*p) { serial = p; last_msg.clear(); parser.setReceiver(this); }
+  void readSerialBuffer();
+  virtual void getText(const VPSS& data);
+  virtual void getHexData(const std::string& cmd, const std::string&arg);
+  virtual ~VICTRON() {};
+} g_Victron[NUM_DEVICES];
 
-//  std::vector<Victron_Serial*> serial_lst; // new
-} g_Victron;
+void VICTRON::readSerialBuffer() 
+{
+  if (serial == NULL) return;
+  int ret=-1;
+  auto bytesAvailable = serial->available();
+  if (bytesAvailable > 0) {
+    AddLog(LOG_LEVEL_DEBUG, PSTR("%s:%s(): parsing %d bytes...\n"), __FILE__, __func__, bytesAvailable);
+  }
+  for( int i=0; i<bytesAvailable; ++i ) {
+    auto ret= serial->read();
+    if (ret==-1) break; // should never happen because char is available
+    nbytesToday++;
+    parser.parseCharacter(static_cast<char>(ret&0xff));
+  }
+}
+
+void VICTRON::getText(const VPSS& data)
+{
+  last_msg=data;
+  AddLog(LOG_LEVEL_DEBUG_MORE, PSTR("%s:%s(): got %d KV-pairs\n"), __FILE__, __func__, (int) last_msg.size());
+}
+void VICTRON::getHexData(const std::string& cmd, const std::string&arg)
+{
+HERE();
+}
+
+
+
+// maybe the static array is not a good idea, so we access an instance only by
+VICTRON* getVP(int i=0)
+{
+  if (i<0 || i >= NUM_DEVICES) return nullptr; 
+  return & (g_Victron[i]);
+};
 
 
 const Tuple *get_et(const char *key) {
@@ -303,8 +418,7 @@ const Tuple *get_et(const char *key) {
 }
 
 
-static bool read_uart(std::string & rv, void *vp) {
-  VICTRON *v = (VICTRON*)vp;
+static bool read_uart(std::string & rv, VICTRON* v) {
   rv = ""; // empty string
   bool do_loop = true; //
   do {
@@ -314,7 +428,7 @@ static bool read_uart(std::string & rv, void *vp) {
     size_t  got = v->serial->read(buf, toread);
     if (got == (size_t)s_available) do_loop = false; // no need for a loop
     rv += std::string(buf, buf+got);
-    v->nbytes += got;
+    v->nbytesToday += got;
   } while (do_loop);
 
   return true; // success
@@ -373,7 +487,57 @@ static uint8_t get_checksum(const std::string & s) {
  * (Source: https://www.victronenergy.com/upload/documents/VE.Direct-Protocol-3.32.pdf)
 
 Additionally, if the HEX protocol is activated, then HEX blocks can be intermixed
-The frame format of the VE.Direct protocol has the following general format:
+That gives an input that looks like this:
+
+PID	0xA042
+FW	150
+SER#	HQ1933IGKS2
+V	13120
+I	220
+VPV	16000
+PPV	2
+CS	3
+MPPT	1
+ERR	0
+LOAD	ON
+IL	0
+H19	2502
+H20	6
+H21	53
+H22	4
+H23	19
+HSDS	351
+Checksum	œ:55041BF
+:A0002000148
+:A0102000345
+:A0202000200000045
+:AD7ED00020085
+:AD5ED00200564
+:ABCED001B01000086
+:ABBED0040065D
+:AB3ED0001AA
+:AADED000000B1
+:AA8ED0001B5
+:A30200001FA
+:ABCED001A01000087
+:AB3ED0002A9
+:ABBED0042065B
+:ABCED001901000088
+:ABBED00470656
+:AD5ED00210563
+:A0002000148
+:A0102000345
+:A0202000200000045
+:AD7ED00020085
+
+PID	0xA042
+FW	150
+SER#	HQ1933IGKS2
+V	13130
+I	210
+.....
+
+The frame format of the VE.Direct HEX protocol has the following general format:
 : [command] [data][data][…] [check]\n
 Where the colon indicates the start of the frame and the newline is the end of frame. The sum of all
 data bytes and the check must equal 0x55. Since the normal protocol is in text values the frames are
@@ -381,57 +545,47 @@ sent in their hexadecimal ASCII representation, [‘0’ .. ’9’], [‘A’ .
 need to escape any characters.
 : [command] [dataHighNibble, dataLowNibble][……] [checkHigh, checkLow] \n
 Note: The command is only send as a single nibble. Numbers are sent in Little Endian format. An
-error response with value 0xAAAA is sent on framing errors.
+error response with value 0xAAAA is sent on framing errors. More details can be found in
+the documenation of 
 
-So, I implemented a state machine that discriminates the data stream HEX Blocks and 
+So, I implemented a state machine that discriminates the data stream HEX Blocks and the key-value text blocks
+and emit tokens to a given receiver whenever a valid item (either validate text block or Hex Item ) is detected.
 
 **/
-enum class State {
-  IN_KEY,
-  IN_VALUE,
-  IN_CHECKSUM,
-  IN_COMMAND,
-  IN_HEX,
-  UNKNOWN
-};
-
-class Parser {
-public:
-  Parser() : state(State::UNKNOWN), checksum(0) {};
-private:
-  void parseCharacter(const char c);
-  void pushKey(const std::string& key) {};
-  void emitHexMessage();
-  void emitText();
-  State state;
-  uint32_t checksum;
-  std::string key;
-  std::string value;
-  std::string hexline;
-
-};
 
 void Parser::parseCharacter(const char c)
 {
+  AddLog(LOG_LEVEL_DEBUG_MORE, PSTR("%s:%s(): state: %d char 0x%02x\n"), __FILE__, __func__, (int) state, (int)c);
   switch (state) {
   case State::UNKNOWN:
     if (c=='\r') {
       checksum=static_cast<uint8>(c);
       state = State::IN_KEY;
+      key="";
+      value="";
     }
     else if (c ==':') {
       checksum=static_cast<uint8>(c);
       state = State::IN_HEX;
     }
+    // all other characters are skipped until we sync to \r or :
     break;
 
   case State::IN_KEY:
     checksum+=static_cast<uint8>(c);
     if (c == '\r') {
+      if (key.size() >0) {
+        // error, eol before value
+        state = State::UNKNOWN;
+      }
       //skip
     }
-    else if (c =='n') {
-      //skip
+    else if (c =='\n') {
+      if (key.size() >0) {
+        // error, eol before value
+        state = State::UNKNOWN;
+      }
+      // is counted for checksum but not part of key
     }
     else if (c == '\t') {
       if (key == "Checksum") {
@@ -439,45 +593,109 @@ void Parser::parseCharacter(const char c)
       }
       else {
         state = State::IN_VALUE;
-        pushKey(key);
-        key="";
+        // key done
+        //key="";
       }
     }
     else {
+      if (key.size() >9) {
+        key.clear();
+        // protocol error as keys only hae up to 9 chars according protocol definition
+        state= State::UNKNOWN;
+      }
+
       key.push_back(c);
     }
     break;
 
   case State::IN_CHECKSUM:
+    {
+    int  cs = checksum & 0xff;
+    AddLog(LOG_LEVEL_INFO, PSTR("%s:%s(): IN_CHECKSUM %d, char %d, total %d\n"), __FILE__, __func__, cs, (int)c, checksum);
     // operate the checksum
     if (checksum & 0xff == static_cast<uint8_t>(c)) {
       // checksum is OK, we can emit all key/value pairs now
       emitText();
     }
-    else {
+     else {
       // bad luck. clear and start again
+      emitText(); // ignore bad checksum until we fixed that calculation bug
     }
-    // thi is tricky: the next char may be a : from the next HEX or a newline with text
+    keyValues.clear();
+    // this is tricky: the next char may be a : from the next HEX or a carriage return that starts a newtext
     state = State::UNKNOWN;
+    checksum=0;
+    }
     break;
   
   case State::IN_HEX:
     if (c == '\n') {
       emitHexMessage();
-      hexline="";    
+      hexline="";
+      state=State::UNKNOWN;  // either text or hex may follow  
+    }
+    else if (c == '\r') {
+      // skip, should not happen, but helpful for testing with file test data
     }
     else {
       hexline.push_back(c);
     };
     break;
-  // no otherwise else to find missing states by compiler
+
+  case State::IN_VALUE:
+    checksum+=static_cast<uint8>(c);
+    if (c == '\r') {
+      // end of value because new block seen
+      pushKeyValue();
+      state = State::IN_KEY;
+      key="";
+      value="";
+    }
+    else {
+      if (value.size() > 33) {
+        // according to protocoll only up to 33 chars as value
+        value.clear();
+        state = State::UNKNOWN;
+      }
+      else {
+        value.push_back(c);
+      }
+    }
+    break;
+
   }
 };
 
+void Parser::pushKeyValue()
+{
+  AddLog(LOG_LEVEL_DEBUG, PSTR("%s:%s(): gotKeyValue %s: %s\n"), __FILE__, __func__, key.c_str(), value.c_str());
+  keyValues.push_back(PSS(key, value));
+}
 
-static void Victron250ms(void *vp) {                // Every 250ms
-  if (!vp) return;
-  VICTRON *v = (VICTRON*)vp;
+void Parser::emitHexMessage()
+{
+  AddLog(LOG_LEVEL_DEBUG, PSTR("%s:%s(): gotHexMsg %s\n"), __FILE__, __func__, hexline.c_str());
+
+  keyValues.push_back(PSS(key, value));
+
+}
+
+void Parser::emitText()
+{
+  if (receiverPtr) receiverPtr->getText(keyValues);
+}
+
+static void Victron250ms() 
+{                // Every 250ms
+  VICTRON *v = getVP();
+  if (!v) return;
+  v->readSerialBuffer();
+}   
+
+static void OldVictron250ms() 
+{                // Every 250ms
+  VICTRON *v = getVP();
+  if (!v) return;
   if (v->serial == NULL)
     return;
   int s_available = v->serial->available();
@@ -521,7 +739,7 @@ static void Victron250ms(void *vp) {                // Every 250ms
     v->last_250ms_had_data = false;
   } else { // s_available == 0
     std::string s = "";
-    bool rv = read_uart(s, vp);
+    bool rv = read_uart(s, v);
     if (rv) {
       v->backlog += s;
       v->last_250ms_had_data = true;
@@ -531,38 +749,39 @@ static void Victron250ms(void *vp) {                // Every 250ms
   }
 }
 
-static void VictronInit(void *vp) {
-  if (!vp) return;
-  VICTRON *v = (VICTRON*)vp;
+static void VictronInit() {
+  static uint callCount=0;
+  // the first defvice is assigned to RX TX
+
   if (PinUsed(GPIO_VICTRON_VEDIRECT_RX)) {
     AddLog(LOG_LEVEL_DEBUG, PSTR("%s:%s(void):%d Pin(GPIO_VICTRON_VEDIRECT_RX): %d, GPIO_VICTRON_VEDIRECT_RX:(%d)\n"), __FILE__, __func__, __LINE__,
                             (int)Pin(GPIO_VICTRON_VEDIRECT_RX), (int)GPIO_VICTRON_VEDIRECT_RX);
-    v->serial = new TasmotaSerial(Pin(GPIO_VICTRON_VEDIRECT_RX), -1, 1 /* hw fallback */, 0 /* nwmode, 0 default */, VICTRON_MSG_SIZE /* buf size */);
-    if (v->serial == NULL) return;
-    if (v->serial->begin(VICTRON_BAUTRATE)) { // 480 bytes / 250ms
-      if (v->serial->hardwareSerial()) {
+    TasmotaSerial* sp = new TasmotaSerial(Pin(GPIO_VICTRON_VEDIRECT_RX), -1, 1 /* hw fallback */, 0 /* nwmode, 0 default */, VICTRON_MSG_SIZE /* buf size */);
+    if (sp == NULL) return;
+    if (sp->begin(VICTRON_BAUTRATE)) { // 480 bytes / 250ms
+      if (sp->hardwareSerial()) {
         ClaimSerial();
+        AddLog(LOG_LEVEL_DEBUG, PSTR("%s: hwserial claimed\n"), __func__);
       }
     }
-  }
-}
-
-static void process_PID(const Tuple *tuple, const char *value, std::string & rv) {
-  if (!tuple || !value) return;
-  for (size_t i = 0; i < sizeof(pid_mapping)/sizeof(pid_mapping[0]); i++) {
-    if (0 == strcasecmp(value, pid_mapping[i].pid)) {
-      rv = std::string(pid_mapping[i].product_name) + " (" + std::string(value) + ")";
-      return;
+    // now we have a valid serial device that we can give the first instance
+    VICTRON* v = getVP();
+    if (v) {
+      v->init(sp);
+      AddLog(LOG_LEVEL_DEBUG, PSTR("%s: RX buffer %d\n"), __func__, (int)sp->getRxBufferSize());
     }
   }
-  rv = "Unknown (" + std::string(value) + ")";
+  // add initialization to all others
 }
-
 
 static void my_fmt(const Tuple *tuple, const char *value, std::string & rv) {
   if (tuple == NULL || value == NULL) return;
   if (0 == strcmp("PID", tuple->label)) {
-    process_PID(tuple, value, rv);
+    rv = PID2Devicename(value);
+    return;
+  }
+  if (0 == strcmp("CS", tuple->label)) {
+    rv = CS2name(value);
     return;
   }
   char tmp[128] = {0};
@@ -585,13 +804,14 @@ static void my_fmt(const Tuple *tuple, const char *value, std::string & rv) {
 }
 
 
-static void VictronShow(bool json, void *vp) {
-  if (!vp) return;
-  VICTRON *v = reinterpret_cast<VICTRON*>(vp);
-  if (json) {
+static void VictronShowJSON() {
+
+  VICTRON *v = getVP();
+  if (!v) return;
+
     auto t0 = millis();
     ResponseAppend_P(PSTR(",\"VictronVE.Direct\":[" ));
-    if (v->last_msg.size() >= 1 && v->last_msg[v->last_msg.size()-1].first == "Checksum") {
+    if (v->last_msg.size() >= 1 && 1 /*v->last_msg[v->last_msg.size()-1].first == "Checksum" */) {
       for (size_t i = 0; i < v->last_msg.size()-1; i++) {
         auto p = v->last_msg[i];
         std::string key = p.first;
@@ -614,103 +834,91 @@ static void VictronShow(bool json, void *vp) {
       char cs[16] = {0};
       snprintf(cs, sizeof(cs), "0x%02x", (unsigned)v->last_msg[v->last_msg.size()-1].second[0]);
       ResponseAppend_P(PSTR("{\"Checksum\": \"%s\"}]"), cs);
-      ResponseAppend_P(PSTR(",\"bytes_read\": %lld"), (long long)v->nbytes);
+      ResponseAppend_P(PSTR(",\"bytes_read\": %lld"), (long long)v->nbytesToday);
     }
     auto t1 = millis();
     auto delta = t1 - t0;
     ResponseAppend_P(PSTR(",\"MetaTS\": {\"Start_TS\": %lld, \"End_TS\": %lld, \"Delta\": %lld}"), (long long)t0, (long long)t1, (long long)delta);
-#ifdef USE_WEBSERVER
-  } else { // if json
-    char tmpbuf[20] = {0};
-    for (int idx = 0; idx < 1; idx++) { // v->serial_lst.size(); idx++) {
-      if (idx > 0) { // not before first
-        WSContentSend_P(PSTR("<hr>\n"));
-      }
-      AddLog(LOG_LEVEL_DEBUG, PSTR("%s:%s():%d idx=%d\n"), __FILE__, __func__, __LINE__, (int)idx);
-      const VICTRON *cur = v; //->serial_lst[idx];
-      if (cur->last_msg.size() >= 1 && cur->last_msg[cur->last_msg.size()-1].first == "Checksum") {
-        HERE();
-        for (size_t i = 0; i < cur->last_msg.size()-1; i++) {
-          auto p = cur->last_msg[i];
-          std::string key = p.first;
-          std::string value = p.second;
-          std::string unit = "n/a";
-          std::string desc = "n/a";
-          if (key == "Checksum") continue; // skip the Checksum entry as that will be handled below
-          const Tuple *node = get_et(key.c_str());
-          if (node != NULL) {
-            unit = std::string(node->unit);
-            desc = std::string(node->description);
-          }
-          // WSContentSend_P(PSTR(HTTP_VICTRON_4S_FORTMATSTR), key.c_str(), value.c_str(), unit.c_str(), desc.c_str());
-// #define HTTP_VICTRON_4S_FORTMATSTR "<tr>  <th>%s</th> <td></td> <td>%s</td> <td></td> <td>%s</td> <td></td> <td>%s</td>  </tr>"
-          {
-            std::string formated_value = "";
-            std::string desc = "";
-            if (node->alt_name) desc = std::string(node->alt_name);
-            else desc = std::string(node->description);
-            my_fmt(node, value.c_str(), formated_value);
-            WSContentSend_PD(PSTR("<tr><th>%s</th><td>%s</td></tr>\n"), desc.c_str(), formated_value.c_str());
-          }
-        }
+  }
 
-        snprintf(tmpbuf, sizeof(tmpbuf), "0x%02x", (unsigned)cur->last_msg[cur->last_msg.size()-1].second[0]);
-        // WSContentSend_P(PSTR(HTTP_VICTRON_4S_FORTMATSTR), "Checksum", tmpbuf, "", "Single byte checksum over data");
-        WSContentSend_P(PSTR("<tr><th>%s</th><td>%s</td></tr>\n"), "Checksum", tmpbuf);
-      } else {
-        HERE();
-        AddLog(LOG_LEVEL_DEBUG, PSTR("%s:%s():%d cur->last_msg.size()=%d first=%s\n"), __FILE__, __func__, __LINE__, (int)cur->last_msg.size(), "xxx");
+#ifdef USE_WEBSERVER
+static void VictronShowWeb() {
+  VICTRON *v = getVP();
+  if (!v) return;
+  char tmpbuf[20] = {0};
+  for (int idx = 0; idx < 1; idx++) { // v->serial_lst.size(); idx++) {
+    if (idx > 0) { // not before first
+      WSContentSend_P(PSTR("<hr>\n"));
+    }
+    AddLog(LOG_LEVEL_DEBUG, PSTR("%s:%s():%d idx=%d"), __FILE__, __func__, __LINE__, (int)idx);
+    const VICTRON *cur = v; //->serial_lst[idx];
+    for (size_t i = 0; i < cur->last_msg.size(); i++) {
+      auto kvp = cur->last_msg[i];
+      std::string key = kvp.first;
+      std::string value = kvp.second;
+      std::string unit = "";
+      std::string desc = key;
+      const Tuple *node = get_et(key.c_str());
+      if (node != NULL) {
+        unit = std::string(node->unit);
+        desc = std::string(node->description);
       }
-    } // serial_lst-loop
-    snprintf(tmpbuf, sizeof(tmpbuf), "%lld", (long long)v->nbytes);
-    // WSContentSend_P(PSTR(HTTP_VICTRON_4S_FORTMATSTR), "nbytes", tmpbuf, "", "Bytes received on UART");
-    WSContentSend_P(PSTR("<tr><th>%s</th><td>%s</td></tr>\n"), "Received bytes", tmpbuf);
+      {
+        std::string formated_value = value;
+        desc = (node->alt_name != NULL) ? std::string(node->alt_name) : desc;
+        my_fmt(node, value.c_str(), formated_value);
+
+        WSContentSend_PD(PSTR("<tr><th>%s</th><td>%s</td></tr>\n"), desc.c_str(), formated_value.c_str());
+      }
+    }
+  } // serial_lst-loop
+  snprintf(tmpbuf, sizeof(tmpbuf), "%lld", (long long)v->nbytesToday);
+  // WSContentSend_P(PSTR(HTTP_VICTRON_4S_FORTMATSTR), "nbytes", tmpbuf, "", "Bytes received on UART");
+  WSContentSend_P(PSTR("<tr><th>%s</th><td>%s</td></tr>\n"), "Received bytes", tmpbuf);
+}
 #endif // USE_WEBSERVER
-  } // if json
+
+static void VicronAtMidnight()
+{
+   VICTRON *v = getVP();
+  if (!v) return;   
+  v->nbytesToday=0;   
 }
 
-
 bool Xsns107(uint32_t function) {
-  VICTRON *v = &g_Victron;
-  //v->_xsns107++;
 
   switch (function) {
     case FUNC_EVERY_50_MSECOND:
-      v->_50ms++;
       break;
     case FUNC_EVERY_100_MSECOND:
       break;
     case FUNC_EVERY_200_MSECOND: // seems not to be called...
       break;
     case FUNC_EVERY_250_MSECOND:
-      HERE();
-      v->_250ms++;
-      Victron250ms((void*)v);
-      //Victron250msV2((void*)v);
+      Victron250ms();
       break;
     case FUNC_LOOP:
       break;
     case FUNC_SLEEP_LOOP:
       break;
     case FUNC_EVERY_SECOND:
-      HERE();
       break;
     case FUNC_JSON_APPEND:
-      HERE();
-      VictronShow(true, (void*)v);
+      VictronShowJSON();
       break;
 #ifdef USE_WEBSERVER
     case FUNC_WEB_SENSOR:
-      HERE();
-      VictronShow(false, (void*)v);
+      VictronShowWeb();
       break;
 #endif  // USE_WEBSERVER
+    case FUNC_SAVE_AT_MIDNIGHT:
+      VicronAtMidnight();
+      break;
     case FUNC_INIT:
-      HERE();
-      VictronInit((void*)v);
+      VictronInit();
       break;
-    default:
-      break;
+//    default:
+//      break;
   }
   return true;
 }
