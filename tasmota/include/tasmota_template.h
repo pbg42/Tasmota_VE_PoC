@@ -211,10 +211,7 @@ enum UserSelectablePins {
   GPIO_LOX_O2_RX,                       // LOX-O2 RX
   GPIO_VICTRON_VEDIRECT_RX,             // 
   GPIO_VICTRON_VEDIRECT_TX,             //
-  //GPIO_VICTRON_VEDIRECT_RX0,
-  //GPIO_VICTRON_VEDIRECT_RX1,
-  //GPIO_VICTRON_VEDIRECT_RX2,
-  //GPIO_VICTRON_VEDIRECT_RX3,
+ 
   GPIO_SENSOR_END };
 
 // Error as warning to rethink GPIO usage with max 2045
@@ -979,11 +976,8 @@ const uint16_t kGpioNiceList[] PROGMEM = {
   AGPIO(GPIO_VINDRIKTNING_RX),          // Ikea Vindriktning
 #endif
 #ifdef USE_VICTRON
-  AGPIO(GPIO_VICTRON_VEDIRECT_RX),    // Serial Interface for VE-Direct Protocol
-  AGPIO(GPIO_VICTRON_VEDIRECT_TX),
-//  AGPIO(GPIO_VICTRON_VEDIRECT_RX1),
-//  AGPIO(GPIO_VICTRON_VEDIRECT_RX2),
-//  AGPIO(GPIO_VICTRON_VEDIRECT_RX3),
+  AGPIO(GPIO_VICTRON_VEDIRECT_RX)+ MAX_VICTRON_VEDIRECT_DEVICES,    // Serial Interface for VE-Direct Protocol
+  AGPIO(GPIO_VICTRON_VEDIRECT_TX)+ MAX_VICTRON_VEDIRECT_DEVICES,
 #endif
 #ifdef USE_HM330X
   AGPIO(GPIO_HM330X_SET),               // HM330X Sleep pin (active low)

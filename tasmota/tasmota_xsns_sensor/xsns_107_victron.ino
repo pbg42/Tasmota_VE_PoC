@@ -46,15 +46,8 @@ pio run -t nobuild -t factory_flash -e tasmota
 #define VICTRON_BAUTRATE 19200
 #define VICTRON_MSG_SIZE (512) /* must be at least more than bytes in 250ms at 19200 Bd: 1920 / 4 == 480 bytes! */
 
-#define MIN(a,b)  ((a) < (b) ? (a) : (b))
-
 typedef std::pair<std::string, std::string> PSS;
 typedef std::vector<PSS> VPSS;
-
-typedef struct {
-  const char *product_name;
-  const char *pid;
-} Pair;
 
 typedef struct {
   const char *label;
@@ -67,12 +60,8 @@ typedef struct {
 
 static std::string PID2Devicename(const char* const pid)
 {
-  typedef struct {
-    const char *product_name;
-    const char *pid;
-  } Pair;
 
-static const Pair pid_mapping[] PROGMEM = {
+static const std::pair<const char*, const char*> pid_mapping[] PROGMEM = {
   {"BMV-700", "0x203"},
   {"BMV-702", "0x204"},
   {"BMV-700H", "0x205"},
@@ -211,15 +200,15 @@ static const Pair pid_mapping[] PROGMEM = {
   
   std::string rv = std::string(pid);
   for (size_t i = 0; i < sizeof(pid_mapping)/sizeof(pid_mapping[0]); i++) {
-    if (0 == strcasecmp(pid, pid_mapping[i].pid)) {
-      rv = std::string(pid_mapping[i].product_name) + " (" + pid + ")";
+    if (0 == strcasecmp(pid, pid_mapping[i].second)) {
+      rv = std::string(pid_mapping[i].first) + " (" + pid + ")";
       break;
     }
   }
   return rv;
 };
 
-static std::string CS2name(const char* const CS) {
+static std::string CS2name(const char* const val) {
 
   static const std::pair<int, const char*> CSnames[] PROGMEM = {
     {0, "Off"},
@@ -238,12 +227,56 @@ static std::string CS2name(const char* const CS) {
     {248, "BatterySafe"},
     {252,"External Control"} 
   };
-  std::string rv = std::string(CS);
-  int cs_id = 0;
-  if (1 == sscanf(CS, "%i", &cs_id)) {
+  std::string rv = std::string(val);
+  int id = 0;
+  if (1 == sscanf(val, "%i", &id)) {
     for (size_t i = 0; i < sizeof(CSnames)/sizeof(CSnames[0]); i++) {
-      if (CSnames[i].first == cs_id) {
+      if (CSnames[i].first == id) {
         rv = std::string(CSnames[i].second);
+        break;
+      }
+    }
+  }
+  return rv;
+};
+
+static std::string MODE2name(const char* const val) {
+
+  static const std::pair<int, const char*> items[] PROGMEM = {
+    {1, "CHARGER"},
+    {2, "INVERTER"},
+    {4, "OFF"},
+    {5, "ECO"},
+    {253, "SMART"}
+  };
+
+  std::string rv = std::string(val);
+  int id = 0;
+  if (1 == sscanf(val, "%i", &id)) {
+    for (size_t i = 0; i < sizeof(items)/sizeof(items[0]); i++) {
+      if (items[i].first == id) {
+        rv = std::string(items[i].second);
+        break;
+      }
+    }
+  }
+  return rv;
+};
+
+static std::string MPPT2name(const char* const val) {
+
+  static const std::pair<int, const char*> items[] PROGMEM = {
+    {0, "off"},
+    {1, "Voltage or current limit"},
+    {2, "MPPT"},
+  };
+
+  std::string rv = std::string(val);
+  int id = 0;
+  if (1 == sscanf(val, "%i", &id)) {
+    for (size_t i = 0; i < sizeof(items)/sizeof(items[0]); i++) {
+      if (items[i].first == id) {
+        rv = std::string(items[i].second);
         break;
       }
     }
@@ -336,7 +369,7 @@ class Parser {
 public:
   Parser() : state(State::UNKNOWN), checksum(0), receiverPtr(0) {};
   void parseCharacter(const char c);
-  // whenever data gets ready (either a single  )
+  // whenever data gets ready, data is passed to the receiver
   void setReceiver(Receiver* p) { receiverPtr=p; }
 private:
 
@@ -344,7 +377,7 @@ private:
   void emitHexMessage();
   void emitText();
   State state;
-  uint32_t checksum;
+  uint8_t checksum;
   std::string key;
   std::string value;
   std::string hexline;
@@ -353,17 +386,10 @@ private:
 
 };
 
-static const std::size_t NUM_DEVICES = 1;
-
 class VICTRON : Receiver {
   public:
   uint32_t nbytesToday = 0; // at 168 bytes/S  32 bit will overflow. who cares about that number?
-  uint32_t _50ms = 0;
-  uint32_t _250ms = 0;
-  //uint32_t _xsns107 = 0;
-  bool last_250ms_had_data = false;
   TasmotaSerial *serial = NULL;
-  std::string backlog;
   VPSS last_msg;
   Parser parser;
   void init(TasmotaSerial*p) { serial = p; last_msg.clear(); parser.setReceiver(this); }
@@ -371,7 +397,7 @@ class VICTRON : Receiver {
   virtual void getText(const VPSS& data);
   virtual void getHexData(const std::string& cmd, const std::string&arg);
   virtual ~VICTRON() {};
-} g_Victron[NUM_DEVICES];
+} g_Victron[MAX_VICTRON_VEDIRECT_DEVICES];
 
 void VICTRON::readSerialBuffer() 
 {
@@ -382,10 +408,10 @@ void VICTRON::readSerialBuffer()
     AddLog(LOG_LEVEL_DEBUG, PSTR("%s:%s(): parsing %d bytes...\n"), __FILE__, __func__, bytesAvailable);
   }
   for( int i=0; i<bytesAvailable; ++i ) {
-    auto ret= serial->read();
-    if (ret==-1) break; // should never happen because char is available
+    auto val= serial->read();
+    if (val==-1) break; // should never happen because char is available
     nbytesToday++;
-    parser.parseCharacter(static_cast<char>(ret&0xff));
+    parser.parseCharacter(static_cast<char>(val & 0xff));
   }
 }
 
@@ -404,7 +430,7 @@ HERE();
 // maybe the static array is not a good idea, so we access an instance only by
 VICTRON* getVP(int i=0)
 {
-  if (i<0 || i >= NUM_DEVICES) return nullptr; 
+  if (i<0 || i >= sizeof(g_Victron)/sizeof(g_Victron[0])) return nullptr; 
   return & (g_Victron[i]);
 };
 
@@ -417,39 +443,6 @@ const Tuple *get_et(const char *key) {
   return NULL;
 }
 
-
-static bool read_uart(std::string & rv, VICTRON* v) {
-  rv = ""; // empty string
-  bool do_loop = true; //
-  do {
-    uint8_t buf[128] = {0};
-    int s_available = v->serial->available();
-    size_t toread = MIN(sizeof(buf), s_available);
-    size_t  got = v->serial->read(buf, toread);
-    if (got == (size_t)s_available) do_loop = false; // no need for a loop
-    rv += std::string(buf, buf+got);
-    v->nbytesToday += got;
-  } while (do_loop);
-
-  return true; // success
-}
-
-
-
-static bool VictronVerifyChecksum(const std::string & s) {
-  if (s.size() < 12) return false; // 12 because of   >\r\nChecksum\t?<
-  uint8_t qsum = 0;
-  for (size_t i = 0; i < s.size(); i++)
-    qsum = (qsum + (uint8_t)s[i]) & 0xff;
-
-  return qsum == 0; // 0 is the expected sum
-}
-
-
-static uint8_t get_checksum(const std::string & s) {
-  if (s.size() < 12) return 0; // 12 because of   >\r\nChecksum\t?<
-  return (uint8_t)s[s.size()-1];
-}
 
 /*
  * ## Message format ##
@@ -610,16 +603,15 @@ void Parser::parseCharacter(const char c)
 
   case State::IN_CHECKSUM:
     {
-    int  cs = checksum & 0xff;
-    AddLog(LOG_LEVEL_INFO, PSTR("%s:%s(): IN_CHECKSUM %d, char %d, total %d\n"), __FILE__, __func__, cs, (int)c, checksum);
+    checksum+=static_cast<uint8>(c);      
+    AddLog(LOG_LEVEL_INFO, PSTR("%s:%s(): char %d, total %d\n"), __FILE__, __func__, (int)c, (int)checksum);
     // operate the checksum
-    if (checksum & 0xff == static_cast<uint8_t>(c)) {
+    if (checksum == 0) {
       // checksum is OK, we can emit all key/value pairs now
       emitText();
     }
      else {
       // bad luck. clear and start again
-      emitText(); // ignore bad checksum until we fixed that calculation bug
     }
     keyValues.clear();
     // this is tricky: the next char may be a : from the next HEX or a carriage return that starts a newtext
@@ -675,9 +667,7 @@ void Parser::pushKeyValue()
 void Parser::emitHexMessage()
 {
   AddLog(LOG_LEVEL_DEBUG, PSTR("%s:%s(): gotHexMsg %s\n"), __FILE__, __func__, hexline.c_str());
-
   keyValues.push_back(PSS(key, value));
-
 }
 
 void Parser::emitText()
@@ -687,91 +677,36 @@ void Parser::emitText()
 
 static void Victron250ms() 
 {                // Every 250ms
-  VICTRON *v = getVP();
-  if (!v) return;
-  v->readSerialBuffer();
+  for (auto i = 0; i < MAX_VICTRON_VEDIRECT_DEVICES; ++i) {
+    VICTRON *v = getVP(i);
+    if (v) v->readSerialBuffer();
+  }
 }   
 
-static void OldVictron250ms() 
-{                // Every 250ms
-  VICTRON *v = getVP();
-  if (!v) return;
-  if (v->serial == NULL)
-    return;
-  int s_available = v->serial->available();
-  if (s_available == 0) { // No new data available on UART
-    if (v->last_250ms_had_data && v->_250ms >= 4 ) { // we need to process the queued data
-      size_t len = v->backlog.size();
-      if (VictronVerifyChecksum(v->backlog) == true) {
-        AddLog(LOG_LEVEL_DEBUG, PSTR("%s:%s():%d Checksum_ok: 0x%02x\n"), __FILE__, __func__, __LINE__, (unsigned)get_checksum(v->backlog));
-        size_t pos = v->backlog.find("Checksum"); // this should be right at the end at position len - 10
-        if (pos + 10 == len) { // syntactical correct ending
-          char prev_char = 0;
-          size_t start_idx = 0;
-          // \r\nKEY_LABEL1\tVALUE1\r\nKEY_LABEL2\tVALUE2\r\nKEY_LABEL3\t\VALUE3...
-          std::string key, value;
-          VPSS vpss;
-          for (size_t i = 0; i < len; i++) {
-            char c = v->backlog[i];
-            if (i > 0 && c == '\t') { // key has ended...
-              key = v->backlog.substr(start_idx, i - start_idx);
-            } else if (i > 0 && (c == '\r' || (i+1)==len)) { // value has ended...
-              value = v->backlog.substr(start_idx, i - start_idx);
-              vpss.push_back(PSS(key, value));
-            }
-            if (prev_char == '\t' || prev_char == '\n') start_idx = i;
-
-            prev_char = c;
-          }
-          if (key == "Checksum") {
-            value = v->backlog.substr(start_idx, len - start_idx);
-            if (value.size() == 1) {
-              vpss.push_back(PSS(key, value));
-            }
-          }
-          v->last_msg = vpss;
-        }
-      } else {
-        AddLog(LOG_LEVEL_DEBUG, PSTR("%s:%s():%d Checksum_FAIL: 0x%02x\n"), __FILE__, __func__, __LINE__, (unsigned)get_checksum(v->backlog));
-      }
-      v->backlog = ""; // empty backlog data
-    }
-    v->last_250ms_had_data = false;
-  } else { // s_available == 0
-    std::string s = "";
-    bool rv = read_uart(s, v);
-    if (rv) {
-      v->backlog += s;
-      v->last_250ms_had_data = true;
-    } else {
-      v->last_250ms_had_data = false;
-    }
-  }
-}
-
 static void VictronInit() {
-  static uint callCount=0;
-  // the first defvice is assigned to RX TX
-
-  if (PinUsed(GPIO_VICTRON_VEDIRECT_RX)) {
-    AddLog(LOG_LEVEL_DEBUG, PSTR("%s:%s(void):%d Pin(GPIO_VICTRON_VEDIRECT_RX): %d, GPIO_VICTRON_VEDIRECT_RX:(%d)\n"), __FILE__, __func__, __LINE__,
-                            (int)Pin(GPIO_VICTRON_VEDIRECT_RX), (int)GPIO_VICTRON_VEDIRECT_RX);
-    TasmotaSerial* sp = new TasmotaSerial(Pin(GPIO_VICTRON_VEDIRECT_RX), -1, 1 /* hw fallback */, 0 /* nwmode, 0 default */, VICTRON_MSG_SIZE /* buf size */);
-    if (sp == NULL) return;
-    if (sp->begin(VICTRON_BAUTRATE)) { // 480 bytes / 250ms
-      if (sp->hardwareSerial()) {
-        ClaimSerial();
-        AddLog(LOG_LEVEL_DEBUG, PSTR("%s: hwserial claimed\n"), __func__);
+  for (uint32_t index = 0; index < MAX_VICTRON_VEDIRECT_DEVICES; index++) {
+    if (PinUsed(GPIO_VICTRON_VEDIRECT_RX, index) ) {
+      auto pinRX=Pin(GPIO_VICTRON_VEDIRECT_RX, index);
+      auto pinTX=Pin(GPIO_VICTRON_VEDIRECT_TX, index); // may be not assigned=-1, then no command interface
+      AddLog(LOG_LEVEL_INFO, PSTR("%s:%s():%d Pin(GPIO_VICTRON_VEDIRECT_RX, %d): %d, Pin(GPIO_VICTRON_VEDIRECT_TX,%d): %d\n"), 
+            __FILE__, __func__, __LINE__, index, (int)pinRX, index, (int)pinTX);
+      TasmotaSerial* sp = new TasmotaSerial(pinRX, pinTX, 1 /* hw fallback */, 0 /* nwmode, 0 default */, VICTRON_MSG_SIZE /* buf size */);
+      if (sp == NULL) return;
+      if (sp->begin(VICTRON_BAUTRATE)) { // 480 bytes / 250ms
+        if (sp->hardwareSerial()) {
+          ClaimSerial();
+          AddLog(LOG_LEVEL_INFO, PSTR("%s: hwserial claimed\n"), __func__);
+        }
+      }
+    // now we have a valid serial device that we can give the first instance
+      VICTRON* v = getVP(index);
+      if (v) {
+        v->init(sp);
+        AddLog(LOG_LEVEL_INFO, PSTR("%s: Initialized %d with RX buffer %d\n"), __func__, (int)index, (int)sp->getRxBufferSize());
       }
     }
-    // now we have a valid serial device that we can give the first instance
-    VICTRON* v = getVP();
-    if (v) {
-      v->init(sp);
-      AddLog(LOG_LEVEL_DEBUG, PSTR("%s: RX buffer %d\n"), __func__, (int)sp->getRxBufferSize());
-    }
+
   }
-  // add initialization to all others
 }
 
 static void my_fmt(const Tuple *tuple, const char *value, std::string & rv) {
@@ -782,6 +717,14 @@ static void my_fmt(const Tuple *tuple, const char *value, std::string & rv) {
   }
   if (0 == strcmp("CS", tuple->label)) {
     rv = CS2name(value);
+    return;
+  }
+  if (0 == strcmp("MODE", tuple->label)) {
+    rv = MODE2name(value);
+    return;
+  }
+  if (0 == strcmp("MPPT", tuple->label)) {
+    rv = MPPT2name(value);
     return;
   }
   char tmp[128] = {0};
@@ -843,15 +786,14 @@ static void VictronShowJSON() {
 
 #ifdef USE_WEBSERVER
 static void VictronShowWeb() {
-  VICTRON *v = getVP();
-  if (!v) return;
   char tmpbuf[20] = {0};
-  for (int idx = 0; idx < 1; idx++) { // v->serial_lst.size(); idx++) {
+  for (int idx = 0; idx < MAX_VICTRON_VEDIRECT_DEVICES; idx++) { 
+    const VICTRON *cur = getVP(idx);
+    if (!cur) break;
     if (idx > 0) { // not before first
       WSContentSend_P(PSTR("<hr>\n"));
     }
-    AddLog(LOG_LEVEL_DEBUG, PSTR("%s:%s():%d idx=%d"), __FILE__, __func__, __LINE__, (int)idx);
-    const VICTRON *cur = v; //->serial_lst[idx];
+    //AddLog(LOG_LEVEL_DEBUG, PSTR("%s:%s():%d idx=%d"), __FILE__, __func__, __LINE__, (int)idx);
     for (size_t i = 0; i < cur->last_msg.size(); i++) {
       auto kvp = cur->last_msg[i];
       std::string key = kvp.first;
@@ -867,14 +809,12 @@ static void VictronShowWeb() {
         std::string formated_value = value;
         desc = (node->alt_name != NULL) ? std::string(node->alt_name) : desc;
         my_fmt(node, value.c_str(), formated_value);
-
         WSContentSend_PD(PSTR("<tr><th>%s</th><td>%s</td></tr>\n"), desc.c_str(), formated_value.c_str());
       }
     }
-  } // serial_lst-loop
-  snprintf(tmpbuf, sizeof(tmpbuf), "%lld", (long long)v->nbytesToday);
-  // WSContentSend_P(PSTR(HTTP_VICTRON_4S_FORTMATSTR), "nbytes", tmpbuf, "", "Bytes received on UART");
-  WSContentSend_P(PSTR("<tr><th>%s</th><td>%s</td></tr>\n"), "Received bytes", tmpbuf);
+  }
+  //snprintf(tmpbuf, sizeof(tmpbuf), "%lld", (long long)v->nbytesToday);
+  //WSContentSend_P(PSTR("<tr><th>%s</th><td>%s</td></tr>\n"), "Received bytes", tmpbuf);
 }
 #endif // USE_WEBSERVER
 

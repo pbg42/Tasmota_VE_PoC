@@ -145,6 +145,8 @@ const uint8_t MAX_SWITCHES_TXT = 28;        // Max number of switches user text
 const uint8_t MAX_HUE_DEVICES = 15;         // Max number of Philips Hue device per emulation
 const uint8_t MAX_ROTARIES = 2;             // Max number of Rotary Encoders
 
+const uint8_t MAX_VICTRON_VEDIRECT_DEVICES = 4;
+
 const char MQTT_TOKEN_PREFIX[] PROGMEM = "%prefix%";  // To be substituted by mqtt_prefix[x]
 const char MQTT_TOKEN_TOPIC[] PROGMEM = "%topic%";    // To be substituted by mqtt_topic, mqtt_grptopic, mqtt_buttontopic, mqtt_switchtopic
 const char WIFI_HOSTNAME[] = "%s-%04d";     // Expands to <MQTT_TOPIC>-<last 4 decimal chars of MAC address>
