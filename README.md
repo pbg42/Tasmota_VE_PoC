@@ -20,7 +20,7 @@ _Written for PlatformIO._
 * Victron Solar Power Regulator MPPT 15/20
 * Phoenix Inverter 12/250
 
-**As I want to implement the protocol described in the manuals, this code should be applicable for similar devices of that product family as well. Micha-m wants to extend the driver to support more than one device, while my target is to implement the HEX protocol as well that allows control of the devices, not only reading the values.**
+**As I want to implement the protocol described in the manuals, this code should be applicable for similar devices of that product family as well. I extended Micha-m's driver to support more than one (up to 4) device and implemented the HEX protocol as well, that allows control of the devices, not only reading the values. The HEX protocol is in early pre-alfa state.**
 
 ***Currently this fork is in alfa-status.***
 

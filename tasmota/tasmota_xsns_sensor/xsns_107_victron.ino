@@ -35,33 +35,24 @@ pio run -t nobuild -t factory_flash -e tasmota
 #include <vector>
 #include <string>
 #include <utility>
-#include <queue>
-#include <map>
 
 #include <TasmotaSerial.h>
 
-#define HTTP_VICTRON_4S_FORTMATSTR "<tr>  <th>%s</th> <td></td> <td>%s</td> <td></td> <td>%s</td> <td></td> <td>%s</td>  </tr>"
-
 #define XSNS_107                 107
 #define VICTRON_BAUTRATE 19200
-#define VICTRON_MSG_SIZE (512) /* must be at least more than bytes in 250ms at 19200 Bd: 1920 / 4 == 480 bytes! */
+#define VICTRON_MSG_SIZE (512) /* must be at least more than # of bytes in 250ms at 19200 Bd: 1920 / 4 == 480 bytes! */
 
 typedef std::pair<std::string, std::string> PSS;
 typedef std::vector<PSS> VPSS;
 
-typedef struct {
-  const char *label;
-  const char *unit;
-  const char *description;
-  const char *alt_name;
-  float multiplication_factor;
-  const char *res_unit;
-} Tuple;
 
 static std::string PID2Devicename(const char* const pid)
 {
-
-static const std::pair<const char*, const char*> pid_mapping[] PROGMEM = {
+struct PAIR {
+  const char first[40];
+  const char second[7];
+};
+static const PAIR pid_mapping[] PROGMEM = {
   {"BMV-700", "0x203"},
   {"BMV-702", "0x204"},
   {"BMV-700H", "0x205"},
@@ -200,8 +191,10 @@ static const std::pair<const char*, const char*> pid_mapping[] PROGMEM = {
   
   std::string rv = std::string(pid);
   for (size_t i = 0; i < sizeof(pid_mapping)/sizeof(pid_mapping[0]); i++) {
-    if (0 == strcasecmp(pid, pid_mapping[i].second)) {
-      rv = std::string(pid_mapping[i].first) + " (" + pid + ")";
+    if (0 == strcasecmp_P(pid, pid_mapping[i].second)) {
+      char tmp[40];
+      strncpy_P(tmp, pid_mapping[i].first, sizeof(tmp));
+      rv = std::string(tmp) + " (" + pid + ")";
       break;
     }
   }
@@ -209,8 +202,13 @@ static const std::pair<const char*, const char*> pid_mapping[] PROGMEM = {
 };
 
 static std::string CS2name(const char* const val) {
+  static const size_t SSIZE=28;
+  struct Pair {
+    const int first;
+    const char second[SSIZE];
+  }; 
 
-  static const std::pair<int, const char*> CSnames[] PROGMEM = {
+  static const Pair items[] PROGMEM = {
     {0, "Off"},
     {1, "Low power"},
     {2, "Fault"},
@@ -230,9 +228,13 @@ static std::string CS2name(const char* const val) {
   std::string rv = std::string(val);
   int id = 0;
   if (1 == sscanf(val, "%i", &id)) {
-    for (size_t i = 0; i < sizeof(CSnames)/sizeof(CSnames[0]); i++) {
-      if (CSnames[i].first == id) {
-        rv = std::string(CSnames[i].second);
+    for (size_t i = 0; i < sizeof(items)/sizeof(items[0]); i++) {
+      int key=id;
+      memcpy_P(&key, &items[i].first, sizeof(key)); 
+      if (key == id) {
+        char value[SSIZE];
+        strncpy_P(value, items[i].second, sizeof(value));
+        rv = std::string(value);
         break;
       }
     }
@@ -241,8 +243,13 @@ static std::string CS2name(const char* const val) {
 };
 
 static std::string MODE2name(const char* const val) {
+  static const size_t SSIZE=9;
+  struct Pair {
+    const int first;
+    const char second[SSIZE];
+  }; 
 
-  static const std::pair<int, const char*> items[] PROGMEM = {
+  static const Pair items[] PROGMEM = {
     {1, "CHARGER"},
     {2, "INVERTER"},
     {4, "OFF"},
@@ -254,8 +261,12 @@ static std::string MODE2name(const char* const val) {
   int id = 0;
   if (1 == sscanf(val, "%i", &id)) {
     for (size_t i = 0; i < sizeof(items)/sizeof(items[0]); i++) {
-      if (items[i].first == id) {
-        rv = std::string(items[i].second);
+      int key=id;
+      memcpy_P(&key, &items[i].first, sizeof(key)); 
+      if (key == id) {
+        char value[SSIZE];
+        strncpy_P(value, items[i].second, sizeof(value));
+        rv = std::string(value);
         break;
       }
     }
@@ -264,8 +275,13 @@ static std::string MODE2name(const char* const val) {
 };
 
 static std::string MPPT2name(const char* const val) {
+  static const size_t SSIZE=25;
+  struct Pair {
+    const int first;
+    const char second[SSIZE];
+  }; 
 
-  static const std::pair<int, const char*> items[] PROGMEM = {
+  static const Pair items[] PROGMEM = {
     {0, "off"},
     {1, "Voltage or current limit"},
     {2, "MPPT"},
@@ -275,8 +291,12 @@ static std::string MPPT2name(const char* const val) {
   int id = 0;
   if (1 == sscanf(val, "%i", &id)) {
     for (size_t i = 0; i < sizeof(items)/sizeof(items[0]); i++) {
-      if (items[i].first == id) {
-        rv = std::string(items[i].second);
+      int key=id;
+      memcpy_P(&key, &items[i].first, sizeof(key)); 
+      if (key == id) {
+        char value[SSIZE];
+        strncpy_P(value, items[i].second, sizeof(value));
+        rv = std::string(value);
         break;
       }
     }
@@ -284,69 +304,151 @@ static std::string MPPT2name(const char* const val) {
   return rv;
 };
 
-static const Tuple field_metadata[] PROGMEM = {
-// label       unit        description                          alt_name
-  {"V",        "mV",       "Main or channel 1 (battery) voltage", "Chan 1 bat voltage", 0.001, "V"},
-  {"V2",       "mV",       "Channel 2 (battery) voltage", "Chan 2 bat voltage", 0.001, "V"},
-  {"V3",       "mV",       "Channel 3 (battery) voltage", "Chan 3 bat voltage", 0.001, "V"},
-  {"VS",       "mV",       "Auxiliary (starter) voltage", "Aux voltage", 0.001, "V"},
-  {"VM",       "mV",       "Mid-point voltage of the battery bank", NULL, 0.001, "V"},
-  {"DM",       "%%",       "Mid-point deviation of the battery bank", NULL, -1.0, NULL},
-  {"VPV",      "mV",       "Panel voltage", NULL, 0.001, "V"},
-  {"PPV",      "W",        "Panel power", NULL, -1.0, NULL},
-  {"I",        "mA",       "Main or channel 1 battery current", "Chan 1 bat current", 0.001, "A"},
-  {"I2",       "mA",       "Channel 2 battery current", "Chan 2 bat current", 0.001, "A"},
-  {"I3",       "mA",       "Channel 3 battery current", "Chan 3 bat current", 0.001, "A"},
-  {"IL",       "mA",       "Load current",                              NULL, 0.001, "A"},
-  {"LOAD",     "",         "Load output state (ON/OFF)",                NULL, -1.0, NULL},
-  {"T",        "°C",       "Battery temperature",                       NULL, -1.0, NULL},
-  {"P",        "W",        "Instantaneous power",                       NULL, -1.0, NULL},
-  {"CE",       "mAh",      "Consumed Amp Hours",                        NULL, 0.001, "Ah"},
-  {"SOC",      "%%",       "State-of-charge",                           NULL, -1.0, NULL},
-  {"TTG",      "Minutes",  "Time-to-go",                                NULL, -1.0, NULL},
-  {"Alarm",    "",         "Alarm condition active",                    NULL, -1.0, NULL},
-  {"Relay",    "",         "Relay state",                               NULL, -1.0, NULL},
-  {"AR",       "",         "Alarm reason",                              NULL, -1.0, NULL},
-  {"OR",       "",         "Off reason",                                NULL, -1.0, NULL},
-  {"H1",       "mAh",      "Depth of the deepest discharge",            NULL, 0.001, "Ah"},
-  {"H2",       "mAh",      "Depth of the last discharge",               NULL, 0.001, "Ah"},
-  {"H3",       "mAh",      "Depth of the average discharge",            NULL, 0.001, "Ah"},
-  {"H4",       "",         "Number of charge cycles",                   NULL, -1.0, NULL},
-  {"H5",       "",         "Number of full discharges",                 NULL, -1.0, NULL},
-  {"H6",       "mAh",      "Cumulative Amp Hours drawn",                NULL, 0.001, "Ah"},
-  {"H7",       "mV",       "Minimum main (battery) voltage",            NULL, 0.001, "V"},
-  {"H8",       "mV",       "Maximum main (battery) voltage",            NULL, 0.001, "V"},
-  {"H9",       "Seconds",  "Number of seconds since last full charge",  NULL, -1.0, NULL},
-  {"H10",      "",         "Number of automatic synchronizations",          NULL, -1.0, NULL},
-  {"H11",      "",         "Number of low main voltage alarms",             NULL, -1.0, NULL},
-  {"H12",      "",         "Number of high main voltage alarms",            NULL, -1.0, NULL},
-  {"H13",      "",         "Number of low auxiliary voltage alarms",        NULL, -1.0, NULL},
-  {"H14",      "",         "Number of high auxiliary voltage alarms",       NULL, -1.0, NULL},
-  {"H15",      "mV",       "Minimum auxiliary (battery) voltage",           NULL, 0.001, "V"},
-  {"H16",      "mV",       "Maximum auxiliary (battery) voltage",           NULL, 0.001, "V"},
-  {"H17",      "0.01 kWh", "Amount of discharged energy (BMV) / Amount of produced energy (DC monitor)", NULL, 0.01f, "kWh"},
-  {"H18",      "0.01 kWh", "Amount of charged energy (BMV) / Amount of consumed energy (DC monitor)", NULL, 0.01f, "kWh"},
-  {"H19",      "0.01 kWh", "Yield total (user resettable counter)",         "Total yield", 0.01f, "kWh"},
-  {"H20",      "0.01 kWh", "Yield today", NULL, 0.01f, "kWh"},
-  {"H21",      "W",        "Maximum power today", NULL, -1.0, NULL},
-  {"H22",      "0.01 kWh", "Yield yesterday", NULL, 0.01f, "kWh"},
-  {"H23",      "W",        "Maximum power yesterday", NULL, -1.0, NULL},
-  {"ERR",      "",         "Error code", NULL, -1.0, NULL},
-  {"CS",       "",         "State of operation", NULL, -1.0, NULL},
-  {"BMV",      "",         "Model description (deprecated)", NULL, -1.0, NULL},
-  {"FW",       "",         "Firmware version (16 bit)", NULL, -1.0, NULL},
-  {"FWE",      "",         "Firmware version (24 bit)", NULL, -1.0, NULL},
-  {"PID",      "",         "Product ID", "Product", -1.0, NULL},
-  {"SER#",     "",         "Serial number", NULL, -1.0, NULL},
-  {"HSDS",     "",         "Day sequence number (0..364)", NULL, -1.0, NULL},
-  {"MODE",     "",         "Device mode", NULL, -1.0, NULL},
-  {"AC_OUT_V", "0.01 V",   "AC output voltage", NULL, 0.01f, "V"},
-  {"AC_OUT_I", "0.1 A",    "AC output current", NULL, 0.01f, "A"},
-  {"AC_OUT_S", "VA",       "AC output apparent power", NULL, -1.0, NULL},
-  {"WARN",     "",         "Warning reason", NULL, -1.0, NULL},
-  {"MPPT",     "",         "Tracker operation mode", NULL, -1.0, NULL},
-  {"MON",      "",         "DC monitor mode", NULL, -1.0, NULL}
+static std::string scale(const char* const value, int divider, int precision)
+{
+  std::string rv = value;
+  int v = 0;
+  if (1 == sscanf(value, "%i", &v)) {
+    char tmp[20];
+    float x = static_cast<float>(v) / divider;
+    ext_snprintf_P(tmp, sizeof(tmp), PSTR("%*_f"), precision, &x);
+    rv = std::string(tmp);
+  }
+  return rv;
 };
+
+std::string f001(const char* const value) { return scale(value, 1000, 3); }
+std::string f01(const char* const value) { return scale(value, 100, 2); }
+std::string f1(const char* const value) { return scale(value, 10, 1); }
+
+static std::string pass(const char* const val) { 
+  std::string ret(val);
+  return ret;
+}
+
+static std::string stringEncode(const char* const val) { 
+  std::string ret("\"");
+  ret += val;
+  ret += "\"";
+  return ret;
+}
+
+struct TupleImpl {
+  public:
+  const char label[10];
+  const char description[80];
+  std::string (*format_func)(const char* const);
+  const int isNumber;
+  const char unit[4];
+  std::string formattedValue(const std::string& value) const  { 
+    if (format_func) return (*format_func)(value.c_str());
+    return value;
+  }
+};
+ 
+static const TupleImpl field_metadata[]  PROGMEM = {
+// label   description       transformer isNumber  unit                 
+  {"V",    "Main or channel 1 (battery) voltage", f001, true, "V"},
+  
+  {"V2",   "Channel 2 (battery) voltage", f001,true, "V"},
+  {"V3",   "Channel 3 (battery) voltage", f001,true, "V"},
+  {"VS",   "Auxiliary (starter) voltage", f001,true, "V"},
+  {"VM",   "Mid-point voltage of the battery bank", f001,true, "V"},
+  {"DM",   "Mid-point deviation of the battery bank", pass, true, "%%"},
+  {"VPV",  "Panel voltage", f001,true, "V"},
+  {"PPV",  "Panel power",  pass, true, "W"},
+  {"I",    "Main or channel 1 battery current",  f001, true, "A"},
+  {"I2",   "Channel 2 battery current", f001, true, "A"},
+  {"I3",   "Channel 3 battery current",  f001, true, "A"},
+  {"IL",   "Load current", f001, true, "A"},
+  {"LOAD", "Load output state (ON/OFF)",  pass, false, ""},
+  {"T",    "Battery temperature", pass, true, "°C"},
+  {"P",    "Instantaneous power", pass, true, "W"},
+  {"CE",   "Consumed Amp Hours", f001, true,"Ah"},
+  {"SOC",  "State-of-charge", pass, true, "%%"},
+  {"TTG",  "Time-to-go",  pass, true, "min"},
+  {"Alarm", "Alarm condition active", pass, false, ""},
+  {"Relay", "Relay state", pass, false, ""},
+  {"AR",    "Alarm reason", pass, false, ""},
+  {"OR",    "Off reason", pass, false, ""},
+  {"H1",    "Depth of the deepest discharge", f001, true, "Ah"},
+  {"H2",    "Depth of the last discharge", f001, true, "Ah"},
+  {"H3",    "Depth of the average discharge", f001, true, "Ah"},
+  {"H4",    "Number of charge cycles", pass, true, ""},
+  {"H5",    "Number of full discharges", pass, true, ""},
+  {"H6",    "Cumulative Amp Hours drawn", f001, true, "Ah"},
+  {"H7",    "Minimum main (battery) voltage", f001, true, "V"},
+  {"H8",    "Maximum main (battery) voltage", f001, true, "V"},
+  {"H9",    "Number of seconds since last full charge", pass, true, "s"},
+  {"H10",   "Number of automatic synchronizations", pass, true, ""},
+  {"H11",   "Number of low main voltage alarms",pass, true, ""},
+  {"H12",   "Number of high main voltage alarms", pass, true, ""},
+  {"H13",   "Number of low auxiliary voltage alarms", pass, true, ""},
+  {"H14",   "Number of high auxiliary voltage alarms", pass, true, ""},
+  {"H15",   "Minimum auxiliary (battery) voltage", f001, true,"V"},
+  {"H16",   "Maximum auxiliary (battery) voltage", f001, true,"V"},
+  {"H17",   "Amount of discharged energy (BMV) / Amount of produced energy (DC monitor)", f01, true,"kWh"},
+  {"H18",   "Amount of charged energy (BMV) / Amount of consumed energy (DC monitor)",f01, true, "kWh"}, 
+  {"H19",   "Yield total", f01, true, "kWh"}, 
+  {"H20",   "Yield today", f01, true, "kWh"}, 
+  {"H21",    "Maximum power today", pass, true, "W"},
+  {"H22",   "Yield yesterday",  f01, true, "kWh"},
+  {"H23",    "Maximum power yesterday", pass,true, "W"},
+  {"ERR",    "Error code", pass, true, ""},
+  {"CS",     "State of operation", CS2name, false, ""},
+  {"BMV",    "Model description (deprecated)", pass, false, ""},
+  {"FW",     "Firmware version (16 bit)",  pass, false, ""},
+  {"FWE",    "Firmware version (24 bit)",  pass, false, ""},
+  {"PID",    "Product ID",  PID2Devicename, false, ""},
+  {"SER#",   "Serial number", pass, false, ""},
+  {"HSDS",   "Day sequence number (0..364)", pass,true, ""},   
+  {"MODE",   "Device mode",  MODE2name, false, ""},
+  {"AC_OUT_V","AC output voltage", f01, true, "V"},
+  {"AC_OUT_I","AC output current", f1, true, "A"},
+  {"AC_OUT_S","AC output apparent power", pass, true, "VA"},
+  {"WARN",    "Warning reason",  pass, false, ""}, 
+  {"MPPT",    "Tracker operation mode", MPPT2name, false, ""}, 
+  {"MON",     "DC monitor mode",  pass, false, ""}
+};
+
+
+class Tuple {
+  // these instances live in RAM. they are copied from Flash by the static find() method
+  private:
+  TupleImpl m_impl;
+  public:
+  Tuple() : m_impl() {}
+  bool isNull() const { return m_impl.description[0]=='\0'; }
+  //const char* label() const {return m_impl.label;}
+  std::string description(const std::string& key) const {return isNull() ? key : m_impl.description;}
+  const char* unit() const {return m_impl.unit;}
+  bool isNumber() const {return m_impl.isNumber != 0;}
+  std::string formatValueForJson(const std::string& value) const {
+      std::string ret = m_impl.formattedValue(value );          
+      if (isNumber()) return ret;
+      return stringEncode(ret.c_str());
+  }
+  std::string formatValueForWeb(const std::string& value) const {
+      std::string val = m_impl.formattedValue(value );          
+      if (strlen(unit())) {
+        val += " ";
+        val += unit();
+      }
+      return val;
+  }
+  static Tuple find(const std::string& label) {
+    Tuple temp;
+    for (size_t i = 0; i < sizeof(field_metadata)/sizeof(field_metadata[0]); i++) {
+      if (0 == strcmp_P(label.c_str(), field_metadata[i].label)) {
+        memcpy_P(&(temp.m_impl), &field_metadata[i], sizeof(TupleImpl)); // copy to ram
+        return temp;
+      }
+    }
+    // construct an empty 
+    return temp;
+  }
+};
+
 
 
 enum class State {
@@ -358,16 +460,19 @@ enum class State {
   UNKNOWN
 };
 
+// abstract interface for message blocks (after checksum was verified, without checksum)
 class Receiver {
   public:
+  // emits a vector of key/ value pairs
   virtual void getText(const VPSS& data)=0;
-  virtual void getHexData(const std::string& cmd, const std::string&arg)=0;
+  // emits Hex messages: cmd is the one nible hex response i.e "A" arg is
+  virtual void getHexData(const std::string& cmd, const std::string& arg)=0;
   virtual ~Receiver() {};
 };
 
 class Parser {
 public:
-  Parser() : state(State::UNKNOWN), checksum(0), receiverPtr(0) {};
+  Parser() : state(State::UNKNOWN), checksum(0), receiverPtr(0), protocolErrorCount(0) {};
   void parseCharacter(const char c);
   // whenever data gets ready, data is passed to the receiver
   void setReceiver(Receiver* p) { receiverPtr=p; }
@@ -383,11 +488,12 @@ private:
   std::string hexline;
   VPSS keyValues;
   Receiver* receiverPtr;
-
+  uint32_t protocolErrorCount;
 };
 
 class VICTRON : Receiver {
   public:
+  VICTRON() : nbytesToday(0), serial(0) {}
   uint32_t nbytesToday = 0; // at 168 bytes/S  32 bit will overflow. who cares about that number?
   TasmotaSerial *serial = NULL;
   VPSS last_msg;
@@ -397,10 +503,12 @@ class VICTRON : Receiver {
   virtual void getText(const VPSS& data);
   virtual void getHexData(const std::string& cmd, const std::string&arg);
   virtual ~VICTRON() {};
-} g_Victron[MAX_VICTRON_VEDIRECT_DEVICES];
+};
 
-void VICTRON::readSerialBuffer() 
-{
+// as there is no controlled removal of devices, I don't care about dtors for the pointers 
+static std::vector<VICTRON*> devices;
+
+void VICTRON::readSerialBuffer() {
   if (serial == NULL) return;
   int ret=-1;
   auto bytesAvailable = serial->available();
@@ -415,35 +523,14 @@ void VICTRON::readSerialBuffer()
   }
 }
 
-void VICTRON::getText(const VPSS& data)
-{
+void VICTRON::getText(const VPSS& data) {
   last_msg=data;
-  AddLog(LOG_LEVEL_DEBUG_MORE, PSTR("%s:%s(): got %d KV-pairs\n"), __FILE__, __func__, (int) last_msg.size());
-}
-void VICTRON::getHexData(const std::string& cmd, const std::string&arg)
-{
-HERE();
+  AddLog(LOG_LEVEL_DEBUG, PSTR("%s:%s(): got %d KV-pairs\n"), __FILE__, __func__, (int) last_msg.size());
 }
 
-
-
-// maybe the static array is not a good idea, so we access an instance only by
-VICTRON* getVP(int i=0)
-{
-  if (i<0 || i >= sizeof(g_Victron)/sizeof(g_Victron[0])) return nullptr; 
-  return & (g_Victron[i]);
-};
-
-
-const Tuple *get_et(const char *key) {
-  for (size_t i = 0; i < sizeof(field_metadata)/sizeof(field_metadata[0]); i++) {
-    if (0 == strcmp(key, field_metadata[i].label))
-      return &field_metadata[i];
-  }
-  return NULL;
+void VICTRON::getHexData(const std::string& cmd, const std::string&arg) {
+  HERE();
 }
-
-
 /*
  * ## Message format ##
  *
@@ -479,7 +566,19 @@ const Tuple *get_et(const char *key) {
  * Multiple blocks are sent containing different fields.
  * (Source: https://www.victronenergy.com/upload/documents/VE.Direct-Protocol-3.32.pdf)
 
-Additionally, if the HEX protocol is activated, then HEX blocks can be intermixed
+
+The frame format of the VE.Direct HEX protocol has the following general format:
+: [command] [data][data][…] [check]\n
+Where the colon indicates the start of the frame and the newline is the end of frame. The sum of all
+data bytes and the check must equal 0x55. Since the normal protocol is in text values the frames are
+sent in their hexadecimal ASCII representation, [‘0’ .. ’9’], [‘A’ .. ’F’], must be uppercase. There is no
+need to escape any characters.
+: [command] [dataHighNibble, dataLowNibble][……] [checkHigh, checkLow] \n
+Note: The command is only send as a single nibble. Numbers are sent in Little Endian format. An
+error response with value 0xAAAA is sent on framing errors. More details can be found in
+the documenation of 
+
+Additionally, if the HEX protocol is activated, then HEX blocks can be intermixed with text protocol.
 That gives an input that looks like this:
 
 PID	0xA042
@@ -530,24 +629,12 @@ V	13130
 I	210
 .....
 
-The frame format of the VE.Direct HEX protocol has the following general format:
-: [command] [data][data][…] [check]\n
-Where the colon indicates the start of the frame and the newline is the end of frame. The sum of all
-data bytes and the check must equal 0x55. Since the normal protocol is in text values the frames are
-sent in their hexadecimal ASCII representation, [‘0’ .. ’9’], [‘A’ .. ’F’], must be uppercase. There is no
-need to escape any characters.
-: [command] [dataHighNibble, dataLowNibble][……] [checkHigh, checkLow] \n
-Note: The command is only send as a single nibble. Numbers are sent in Little Endian format. An
-error response with value 0xAAAA is sent on framing errors. More details can be found in
-the documenation of 
-
 So, I implemented a state machine that discriminates the data stream HEX Blocks and the key-value text blocks
 and emit tokens to a given receiver whenever a valid item (either validate text block or Hex Item ) is detected.
 
 **/
 
-void Parser::parseCharacter(const char c)
-{
+void Parser::parseCharacter(const char c) {
   AddLog(LOG_LEVEL_DEBUG_MORE, PSTR("%s:%s(): state: %d char 0x%02x\n"), __FILE__, __func__, (int) state, (int)c);
   switch (state) {
   case State::UNKNOWN:
@@ -593,8 +680,9 @@ void Parser::parseCharacter(const char c)
     else {
       if (key.size() >9) {
         key.clear();
-        // protocol error as keys only hae up to 9 chars according protocol definition
+        // protocol error as keys only have up to 9 chars according protocol definition
         state= State::UNKNOWN;
+        protocolErrorCount++;
       }
 
       key.push_back(c);
@@ -602,9 +690,8 @@ void Parser::parseCharacter(const char c)
     break;
 
   case State::IN_CHECKSUM:
-    {
     checksum+=static_cast<uint8>(c);      
-    AddLog(LOG_LEVEL_INFO, PSTR("%s:%s(): char %d, total %d\n"), __FILE__, __func__, (int)c, (int)checksum);
+    AddLog(LOG_LEVEL_DEBUG, PSTR("%s:%s() checksum: char %d, total %d\n"), __FILE__, __func__, (int)c, (int)checksum);
     // operate the checksum
     if (checksum == 0) {
       // checksum is OK, we can emit all key/value pairs now
@@ -612,12 +699,13 @@ void Parser::parseCharacter(const char c)
     }
      else {
       // bad luck. clear and start again
+     // emitText();
+      protocolErrorCount++;
     }
     keyValues.clear();
     // this is tricky: the next char may be a : from the next HEX or a carriage return that starts a newtext
     state = State::UNKNOWN;
     checksum=0;
-    }
     break;
   
   case State::IN_HEX:
@@ -631,6 +719,12 @@ void Parser::parseCharacter(const char c)
     }
     else {
       hexline.push_back(c);
+      if (hexline.size() >75) {
+        hexline.clear();
+        // protocol error, longest hex payload is 34 byte (History day payload) -->68+1+4+1+one small egg, according protocol definition
+        state= State::UNKNOWN;
+        protocolErrorCount++;
+      }
     };
     break;
 
@@ -648,6 +742,7 @@ void Parser::parseCharacter(const char c)
         // according to protocoll only up to 33 chars as value
         value.clear();
         state = State::UNKNOWN;
+        protocolErrorCount++;
       }
       else {
         value.push_back(c);
@@ -657,29 +752,23 @@ void Parser::parseCharacter(const char c)
 
   }
 };
-
-void Parser::pushKeyValue()
-{
-  AddLog(LOG_LEVEL_DEBUG, PSTR("%s:%s(): gotKeyValue %s: %s\n"), __FILE__, __func__, key.c_str(), value.c_str());
+void Parser::pushKeyValue() {
+  AddLog(LOG_LEVEL_DEBUG_MORE, PSTR("%s:%s(): gotKeyValue %s: %s\n"), __FILE__, __func__, key.c_str(), value.c_str());
   keyValues.push_back(PSS(key, value));
 }
 
-void Parser::emitHexMessage()
-{
+void Parser::emitHexMessage() {
   AddLog(LOG_LEVEL_DEBUG, PSTR("%s:%s(): gotHexMsg %s\n"), __FILE__, __func__, hexline.c_str());
   keyValues.push_back(PSS(key, value));
 }
 
-void Parser::emitText()
-{
+void Parser::emitText() {
   if (receiverPtr) receiverPtr->getText(keyValues);
 }
 
-static void Victron250ms() 
-{                // Every 250ms
-  for (auto i = 0; i < MAX_VICTRON_VEDIRECT_DEVICES; ++i) {
-    VICTRON *v = getVP(i);
-    if (v) v->readSerialBuffer();
+static void Victron250ms() {               
+  for( auto v : devices) {
+    v->readSerialBuffer();
   }
 }   
 
@@ -691,7 +780,7 @@ static void VictronInit() {
       AddLog(LOG_LEVEL_INFO, PSTR("%s:%s():%d Pin(GPIO_VICTRON_VEDIRECT_RX, %d): %d, Pin(GPIO_VICTRON_VEDIRECT_TX,%d): %d\n"), 
             __FILE__, __func__, __LINE__, index, (int)pinRX, index, (int)pinTX);
       TasmotaSerial* sp = new TasmotaSerial(pinRX, pinTX, 1 /* hw fallback */, 0 /* nwmode, 0 default */, VICTRON_MSG_SIZE /* buf size */);
-      if (sp == NULL) return;
+      if (sp == NULL) continue;
       if (sp->begin(VICTRON_BAUTRATE)) { // 480 bytes / 250ms
         if (sp->hardwareSerial()) {
           ClaimSerial();
@@ -699,167 +788,152 @@ static void VictronInit() {
         }
       }
     // now we have a valid serial device that we can give the first instance
-      VICTRON* v = getVP(index);
+      VICTRON* v = new VICTRON;
       if (v) {
         v->init(sp);
-        AddLog(LOG_LEVEL_INFO, PSTR("%s: Initialized %d with RX buffer %d\n"), __func__, (int)index, (int)sp->getRxBufferSize());
+        devices.push_back(v);
+        AddLog(LOG_LEVEL_INFO, PSTR("%s: Initialized %d with RX buffer %d to instance %d\n"),
+         __func__, (int)index, (int)sp->getRxBufferSize(), (int)devices.size());
+
       }
     }
-
   }
 }
 
-static void my_fmt(const Tuple *tuple, const char *value, std::string & rv) {
-  if (tuple == NULL || value == NULL) return;
-  if (0 == strcmp("PID", tuple->label)) {
-    rv = PID2Devicename(value);
-    return;
-  }
-  if (0 == strcmp("CS", tuple->label)) {
-    rv = CS2name(value);
-    return;
-  }
-  if (0 == strcmp("MODE", tuple->label)) {
-    rv = MODE2name(value);
-    return;
-  }
-  if (0 == strcmp("MPPT", tuple->label)) {
-    rv = MPPT2name(value);
-    return;
-  }
-  char tmp[128] = {0};
-  float factor = tuple->multiplication_factor;
-  const char *unit = tuple->res_unit;
-  if (unit == NULL) unit = tuple->unit; // fallback to default
-  if (factor > 0.0) { // if some sort of multiplication shall happen
-    int v = 0;
-    if (1 == sscanf(value, "%i", &v)) {
-      float x = factor * v;
-      ext_snprintf_P(tmp, sizeof(tmp), PSTR("%*_f %s"), 3, &x, unit);
-      // AddLog(LOG_LEVEL_DEBUG, PSTR("%s:%s():%d v: %d, value: >%s< unit: >%s< tmp:>%s< %d\n"), __FILE__, __func__, __LINE__,
-      //                                                    v, value, unit, tmp, (int)x);
-    }
-  } else {
-    snprintf(tmp, sizeof(tmp), "%s %s", value, unit);
-  }
-  rv = std::string(tmp);
-  // rv += " (" + std::string(tuple->label) + ")";
-}
+/* Command: <device>,<Cmd>,<Args>
+  device 1..4 1 for first device, 2 for second device...
+  Cmd: 'P': send Hex-Ping
+  Cmd: 'S': Set Register, Args see below
+  Cmd: 'G': Get Register Args see below
+  Cmd: 'A': request Asyncronious Register, Args see below
+  Args for S,G,A: <Register>,<Flags>[,valueFormat[,registerValue]]
+  Register: hexCode of address register, i.e '0102' or 'EEF8' always 4 hex symbols [0..1,A..F]
+  Flags:
+  valueFormat: describes the value format. if not give, value will be shown / intepreted as hex-digits and must hav korrect length for the given
+               register. As there are a huge amount of different registers for different devices, this interface does not know them. So you
+               need to supply the correct values, otherwise the Hex-Message will be ill-formed and lead to an error.
+               Known Formats: un8,un16,un24,un32,sn16,sn32, String32,String20. If not given, the value will be guessed from the received number of bytes,
+               if not unique (i.e un16 or sn16) then the signed type will be choosen. Value will be displayed in decimal, except for String32 and String20
+  
+*/
+static const char VICTRON_CMND_START[] PROGMEM = "{\"" D_CMND_SENSOR "%d\":{\"cmd\":\"%s\"";
+static const char VICTRON_CMND_END[] PROGMEM = "}}";
 
+bool VictronCommand(){
+
+ int argc = ArgC();
+  if(argc <2) {
+    return false;
+  }
+  char argument[XdrvMailbox.data_len];
+  char cmd[XdrvMailbox.data_len];
+  char arg1[XdrvMailbox.data_len];
+
+  uint32_t device = atoi(ArgV(argument,1));
+  ArgV(cmd, 2);
+  ArgV(arg1, 2);
+  AddLog(LOG_LEVEL_DEBUG, PSTR("cmd:%d,%s,%s"), (int)device, cmd, arg1); 
+/* 
+  if (device >  devices.size()) {
+    AddLog(LOG_LEVEL_ERROR, PSTR("%s:%s(): requested device %d, but have only %d\n"), __FILE__, __func__, (int)device, (int)devices.size());
+    return false;
+  } 
+  Response_P(VICTRON_CMND_START, XSNS_107, device, cmd);
+  //    ResponseAppend_P(PSTR("%s%c"), argument, ((channel < (INA3221_NB_CHAN-1))?',':'\0'));
+  ResponseAppend_P(VICTRON_CMND_END);
+  */
+  return true;
+}
 
 static void VictronShowJSON() {
 
-  VICTRON *v = getVP();
-  if (!v) return;
-
-    auto t0 = millis();
-    ResponseAppend_P(PSTR(",\"VictronVE.Direct\":[" ));
-    if (v->last_msg.size() >= 1 && 1 /*v->last_msg[v->last_msg.size()-1].first == "Checksum" */) {
-      for (size_t i = 0; i < v->last_msg.size()-1; i++) {
-        auto p = v->last_msg[i];
-        std::string key = p.first;
-        std::string value = p.second;
-        std::string unit = "n/a";
-        std::string desc = "n/a";
-        if (key == "Checksum") continue; // skip the Checksum entry as that will be handled below
-        const Tuple *node = get_et(key.c_str());
-        if (node != NULL) {
-          unit = std::string(node->unit);
-          desc = std::string(node->description);
-        }
-        ResponseAppend_P(PSTR("{"));
-          ResponseAppend_P(PSTR("\"field\": \"%s\","), key.c_str());
-          ResponseAppend_P(PSTR("\"unit\": \"%s\","), unit.c_str());
-          ResponseAppend_P(PSTR("\"value\": \"%s\","), value.c_str());
-          ResponseAppend_P(PSTR("\"description\": \"%s\""), desc.c_str());
-        ResponseAppend_P(PSTR("},"));
-      }
-      char cs[16] = {0};
-      snprintf(cs, sizeof(cs), "0x%02x", (unsigned)v->last_msg[v->last_msg.size()-1].second[0]);
-      ResponseAppend_P(PSTR("{\"Checksum\": \"%s\"}]"), cs);
-      ResponseAppend_P(PSTR(",\"bytes_read\": %lld"), (long long)v->nbytesToday);
+  if (devices.empty()) return;
+  int devId =0;
+  auto t0 = millis();
+  for ( const auto v: devices) {
+    devId++;
+    ResponseAppend_P(PSTR(",\"sensor%d\":{" ), devId);
+    for (const auto kvp: v->last_msg) {
+      Tuple t = Tuple::find(kvp.first);
+      std::string val = t.formatValueForJson(kvp.second);     
+      ResponseAppend_P(PSTR("\"%s\": %s,"), kvp.first.c_str(), val.c_str());
     }
-    auto t1 = millis();
-    auto delta = t1 - t0;
-    ResponseAppend_P(PSTR(",\"MetaTS\": {\"Start_TS\": %lld, \"End_TS\": %lld, \"Delta\": %lld}"), (long long)t0, (long long)t1, (long long)delta);
+    ResponseAppend_P(PSTR("\"bytes_read\": %lld}"), (long long)v->nbytesToday);    
   }
+  auto t1 = millis();
+  auto delta = t1 - t0;
+  ResponseAppend_P(PSTR(",\"MetaTS\": {\"Start_TS\": %lld, \"End_TS\": %lld, \"Delta\": %lld}"), (long long)t0, (long long)t1, (long long)delta);
+}
 
 #ifdef USE_WEBSERVER
 static void VictronShowWeb() {
   char tmpbuf[20] = {0};
-  for (int idx = 0; idx < MAX_VICTRON_VEDIRECT_DEVICES; idx++) { 
-    const VICTRON *cur = getVP(idx);
-    if (!cur) break;
+  int idx=0;
+  for (const auto v: devices) { 
     if (idx > 0) { // not before first
       WSContentSend_P(PSTR("<hr>\n"));
     }
-    //AddLog(LOG_LEVEL_DEBUG, PSTR("%s:%s():%d idx=%d"), __FILE__, __func__, __LINE__, (int)idx);
-    for (size_t i = 0; i < cur->last_msg.size(); i++) {
-      auto kvp = cur->last_msg[i];
-      std::string key = kvp.first;
-      std::string value = kvp.second;
-      std::string unit = "";
-      std::string desc = key;
-      const Tuple *node = get_et(key.c_str());
-      if (node != NULL) {
-        unit = std::string(node->unit);
-        desc = std::string(node->description);
-      }
-      {
-        std::string formated_value = value;
-        desc = (node->alt_name != NULL) ? std::string(node->alt_name) : desc;
-        my_fmt(node, value.c_str(), formated_value);
-        WSContentSend_PD(PSTR("<tr><th>%s</th><td>%s</td></tr>\n"), desc.c_str(), formated_value.c_str());
-      }
+    idx++;
+    AddLog(LOG_LEVEL_DEBUG, PSTR("%s:%s():%d idx=%d"), __FILE__, __func__, __LINE__, (int)idx);
+    for (const auto  kvp : v->last_msg) {
+      Tuple t = Tuple::find(kvp.first);
+      std::string desc = t.description(kvp.first); // fallback to lable for unknown keys
+      std::string val = t.formatValueForWeb(kvp.second);
+      WSContentSend_PD(PSTR("<tr><th>%s</th><td>%s</td></tr>\n"), desc.c_str(), val.c_str());
     }
+    snprintf(tmpbuf, sizeof(tmpbuf), "%lld", (long long)v->nbytesToday);
+    WSContentSend_P(PSTR("<tr><th>%s</th><td>%s</td></tr>\n"), "Received bytes", tmpbuf);
   }
-  //snprintf(tmpbuf, sizeof(tmpbuf), "%lld", (long long)v->nbytesToday);
-  //WSContentSend_P(PSTR("<tr><th>%s</th><td>%s</td></tr>\n"), "Received bytes", tmpbuf);
 }
 #endif // USE_WEBSERVER
 
-static void VicronAtMidnight()
-{
-   VICTRON *v = getVP();
-  if (!v) return;   
-  v->nbytesToday=0;   
+static void VicronAtMidnight() {
+  for( auto v: devices) {
+    v->nbytesToday=0;   
+  }
 }
 
 bool Xsns107(uint32_t function) {
-
-  switch (function) {
-    case FUNC_EVERY_50_MSECOND:
-      break;
-    case FUNC_EVERY_100_MSECOND:
-      break;
-    case FUNC_EVERY_200_MSECOND: // seems not to be called...
-      break;
-    case FUNC_EVERY_250_MSECOND:
-      Victron250ms();
-      break;
-    case FUNC_LOOP:
-      break;
-    case FUNC_SLEEP_LOOP:
-      break;
-    case FUNC_EVERY_SECOND:
-      break;
-    case FUNC_JSON_APPEND:
-      VictronShowJSON();
-      break;
-#ifdef USE_WEBSERVER
-    case FUNC_WEB_SENSOR:
-      VictronShowWeb();
-      break;
-#endif  // USE_WEBSERVER
-    case FUNC_SAVE_AT_MIDNIGHT:
-      VicronAtMidnight();
-      break;
-    case FUNC_INIT:
-      VictronInit();
-      break;
-//    default:
-//      break;
+  bool result = false;
+  if (FUNC_INIT == function) {
+    VictronInit();
   }
-  return true;
+  else if (!devices.empty()) {
+    switch (function) {
+      case FUNC_EVERY_50_MSECOND:
+        break;
+      case FUNC_EVERY_100_MSECOND:
+        break;
+      case FUNC_EVERY_200_MSECOND: // seems not to be called...
+        break;
+      case FUNC_EVERY_250_MSECOND:
+        Victron250ms();
+        break;
+      case FUNC_LOOP:
+        break;
+      case FUNC_SLEEP_LOOP:
+        break;
+      case FUNC_EVERY_SECOND:
+        break;
+      case FUNC_JSON_APPEND:
+        VictronShowJSON();
+        break;
+  #ifdef USE_WEBSERVER
+      case FUNC_WEB_SENSOR:
+        VictronShowWeb();
+        break;
+  #endif  // USE_WEBSERVER
+      case FUNC_SAVE_AT_MIDNIGHT:
+        VicronAtMidnight();
+        break;
+      case FUNC_COMMAND_SENSOR:
+        if (XSNS_107 == XdrvMailbox.index) {
+          return VictronCommand();  // Return true on success
+        }
+        break;
+
+    }
+  }
+  return result;
 }
 #endif  // USE_VICTRON
