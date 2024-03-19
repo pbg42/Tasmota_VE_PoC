@@ -829,7 +829,7 @@
 //  #define VINDRIKTNING_SHOW_PM10                 // Display undocumented/supposed PM10 values
 //#define USE_LD2410                               // Add support for HLK-LD2410 24GHz smart wave motion sensor (+2k8 code)
 // #define USE_LOX_O2                               // Add support for LuminOx LOX O2 Sensor (+0k8 code)
-#define USE_VICTRON
+//#define USE_VICTRON                               // Add support for up to 4 Victron Energy devices with VE.Direct serial protocol (+25kB code)
 
 // -- Power monitoring sensors --------------------
 #define USE_ENERGY_SENSOR                        // Add support for Energy Monitors (+14k code)

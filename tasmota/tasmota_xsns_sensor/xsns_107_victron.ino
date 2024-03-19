@@ -45,7 +45,7 @@ pio run -t nobuild -t factory_flash -e tasmota
 typedef std::pair<std::string, std::string> PSS;
 typedef std::vector<PSS> VPSS;
 
-
+// make shure that the mapping is held in PROGMEM. copy the value from PROGMEM to RAM, or the key itself if not found
 static std::string PID2Devicename(const char* const pid)
 {
 struct PAIR {
@@ -317,9 +317,9 @@ static std::string scale(const char* const value, int divider, int precision)
   return rv;
 };
 
-std::string f001(const char* const value) { return scale(value, 1000, 3); }
-std::string f01(const char* const value) { return scale(value, 100, 2); }
-std::string f1(const char* const value) { return scale(value, 10, 1); }
+static std::string f001(const char* const value) { return scale(value, 1000, 3); }
+static std::string f01(const char* const value) { return scale(value, 100, 2); }
+static std::string f1(const char* const value) { return scale(value, 10, 1); }
 
 static std::string pass(const char* const val) { 
   std::string ret(val);
@@ -334,7 +334,6 @@ static std::string stringEncode(const char* const val) {
 }
 
 struct TupleImpl {
-  public:
   const char label[10];
   const char description[80];
   std::string (*format_func)(const char* const);
@@ -348,16 +347,16 @@ struct TupleImpl {
  
 static const TupleImpl field_metadata[]  PROGMEM = {
 // label   description       transformer isNumber  unit                 
-  {"V",    "Main or channel 1 (battery) voltage", f001, true, "V"},
+  {"V",    "Channel 1 battery voltage", f001, true, "V"},
   
-  {"V2",   "Channel 2 (battery) voltage", f001,true, "V"},
-  {"V3",   "Channel 3 (battery) voltage", f001,true, "V"},
+  {"V2",   "Channel 2 battery voltage", f001,true, "V"},
+  {"V3",   "Channel 3 battery voltage", f001,true, "V"},
   {"VS",   "Auxiliary (starter) voltage", f001,true, "V"},
   {"VM",   "Mid-point voltage of the battery bank", f001,true, "V"},
   {"DM",   "Mid-point deviation of the battery bank", pass, true, "%%"},
   {"VPV",  "Panel voltage", f001,true, "V"},
   {"PPV",  "Panel power",  pass, true, "W"},
-  {"I",    "Main or channel 1 battery current",  f001, true, "A"},
+  {"I",    "Channel 1 battery current",  f001, true, "A"},
   {"I2",   "Channel 2 battery current", f001, true, "A"},
   {"I3",   "Channel 3 battery current",  f001, true, "A"},
   {"IL",   "Load current", f001, true, "A"},
@@ -537,7 +536,7 @@ void VICTRON::getHexData(const std::string& cmd, const std::string&arg) {
  * The device transmits blocks of data at 1 second intervals. Each field
  * is sent using the following format:
  *
- * <Newline><Field-Lable><Tab><Field-Value>
+ * <Newline><Field-Label><Tab><Field-Value>
  *
  * +---------------+--------------------------------------------------------+
  * | Identifier    | Meaning                                                |
@@ -809,7 +808,7 @@ static void VictronInit() {
   Args for S,G,A: <Register>,<Flags>[,valueFormat[,registerValue]]
   Register: hexCode of address register, i.e '0102' or 'EEF8' always 4 hex symbols [0..1,A..F]
   Flags:
-  valueFormat: describes the value format. if not give, value will be shown / intepreted as hex-digits and must hav korrect length for the given
+  valueFormat: describes the value format. if not given, value will be shown / intepreted as hex-digits and must hav korrect length for the given
                register. As there are a huge amount of different registers for different devices, this interface does not know them. So you
                need to supply the correct values, otherwise the Hex-Message will be ill-formed and lead to an error.
                Known Formats: un8,un16,un24,un32,sn16,sn32, String32,String20. If not given, the value will be guessed from the received number of bytes,
@@ -834,6 +833,7 @@ bool VictronCommand(){
   ArgV(arg1, 2);
   AddLog(LOG_LEVEL_DEBUG, PSTR("cmd:%d,%s,%s"), (int)device, cmd, arg1); 
 /* 
+  TO BE CONTINUED
   if (device >  devices.size()) {
     AddLog(LOG_LEVEL_ERROR, PSTR("%s:%s(): requested device %d, but have only %d\n"), __FILE__, __func__, (int)device, (int)devices.size());
     return false;
